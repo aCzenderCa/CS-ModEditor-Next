@@ -1,0 +1,9 @@
+{
+  "InGameName": {
+    "ParentObjectID": "",
+    "LocalizationKey": "",
+    "DefaultText": ""
+  },
+  "UniqueOnBoard": false,
+  "ActionModifiers": []
+}

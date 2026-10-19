@@ -1,0 +1,11 @@
+{
+  "Fields": {
+    "CardName": "LocalizedString",
+    "CardDescription": "LocalizedString",
+    "CardType": "CardTypes",
+    "ObjectWeight": "Single",
+    "CardTags": "CardTag",
+    "SpawningBlockedBy": "CardData",
+    "UniqueID": "String"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "CardName": {
+    "ParentObjectID": "44444444444444444444444444444444",
+    "LocalizationKey": "FixtureMc_FixtureKnife_CardName",
+    "DefaultText": "MC Fixture Knife"
+  },
+  "CardDescription": {
+    "ParentObjectID": "44444444444444444444444444444444",
+    "LocalizationKey": "FixtureMc_FixtureKnife_CardDescription",
+    "DefaultText": "A knife added by the MC fixture mod."
+  },
+  "CardType": 3,
+  "ObjectWeight": 0.3,
+  "CardTags": [],
+  "SpawningBlockedBy": [],
+  "UniqueID": "44444444444444444444444444444444"
+}

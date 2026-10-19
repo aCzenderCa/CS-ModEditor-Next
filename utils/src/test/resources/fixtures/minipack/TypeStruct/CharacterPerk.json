@@ -1,0 +1,7 @@
+{
+  "Fields": {
+    "PerkName": "LocalizedString",
+    "PerkDescription": "LocalizedString",
+    "UniqueID": "String"
+  }
+}

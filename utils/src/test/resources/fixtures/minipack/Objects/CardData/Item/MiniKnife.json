@@ -1,0 +1,17 @@
+{
+  "CardName": {
+    "ParentObjectID": "11111111111111111111111111111111",
+    "LocalizationKey": "MiniKnife_CardName",
+    "DefaultText": "Mini Knife"
+  },
+  "CardDescription": {
+    "ParentObjectID": "11111111111111111111111111111111",
+    "LocalizationKey": "MiniKnife_CardDescription",
+    "DefaultText": "A tiny fixture knife."
+  },
+  "CardType": 3,
+  "ObjectWeight": 0.5,
+  "CardTags": [],
+  "SpawningBlockedBy": [],
+  "UniqueID": "11111111111111111111111111111111"
+}

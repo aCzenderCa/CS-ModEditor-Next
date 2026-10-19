@@ -1,0 +1,13 @@
+{
+  "PerkName": {
+    "ParentObjectID": "22222222222222222222222222222222",
+    "LocalizationKey": "MiniPerk_PerkName",
+    "DefaultText": "Mini Perk"
+  },
+  "PerkDescription": {
+    "ParentObjectID": "22222222222222222222222222222222",
+    "LocalizationKey": "MiniPerk_PerkDescription",
+    "DefaultText": "A tiny fixture perk."
+  },
+  "UniqueID": "22222222222222222222222222222222"
+}

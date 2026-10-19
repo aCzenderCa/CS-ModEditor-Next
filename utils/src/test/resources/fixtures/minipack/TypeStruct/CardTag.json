@@ -1,0 +1,7 @@
+{
+  "Fields": {
+    "InGameName": "LocalizedString",
+    "UniqueOnBoard": "Boolean",
+    "ActionModifiers": "ActionModifier"
+  }
+}

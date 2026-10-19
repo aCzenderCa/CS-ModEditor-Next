@@ -1,0 +1,7 @@
+{
+  "Fields": {
+    "ParentObjectID": "String",
+    "LocalizationKey": "String",
+    "DefaultText": "String"
+  }
+}

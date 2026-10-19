@@ -1,0 +1,17 @@
+{
+  "CardName": {
+    "ParentObjectID": "",
+    "LocalizationKey": "",
+    "DefaultText": ""
+  },
+  "CardDescription": {
+    "ParentObjectID": "",
+    "LocalizationKey": "",
+    "DefaultText": ""
+  },
+  "CardType": 0,
+  "ObjectWeight": 0.0,
+  "CardTags": [],
+  "SpawningBlockedBy": [],
+  "UniqueID": ""
+}

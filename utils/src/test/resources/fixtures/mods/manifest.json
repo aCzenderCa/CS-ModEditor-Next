@@ -1,0 +1,18 @@
+{
+  "mods": [
+    {
+      "id": "ml-sample",
+      "framework": "ML",
+      "game": "CSTI",
+      "path": "ml-sample",
+      "description": "ML 目录型样例 Mod：新对象、GameSourceModify、ScriptableObject、本地化"
+    },
+    {
+      "id": "mc-sample",
+      "framework": "MC",
+      "game": "CSTI",
+      "path": "mc-sample",
+      "description": "MC 目录型样例 Mod：Data 目录、DataObjectModify、Texture2D、按语言本地化"
+    }
+  ]
+}

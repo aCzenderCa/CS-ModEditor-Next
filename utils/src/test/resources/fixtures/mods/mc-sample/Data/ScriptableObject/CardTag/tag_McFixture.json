@@ -1,0 +1,9 @@
+{
+  "InGameName": {
+    "ParentObjectID": "",
+    "LocalizationKey": "FixtureMc_tag_McFixture_InGameName",
+    "DefaultText": "MC Fixture Tag"
+  },
+  "UniqueOnBoard": false,
+  "ActionModifiers": []
+}

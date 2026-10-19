@@ -1,0 +1,24 @@
+CardName:
+  Alias:
+  Note: 卡片名字
+  Comment:
+CardDescription:
+  Alias:
+  Note: 卡片描述
+  Comment:
+CardType:
+  Alias:
+  Note: 卡片类型
+  Comment:
+ObjectWeight:
+  Alias:
+  Note: 卡片重量
+  Comment:
+CardTags:
+  Alias:
+  Note: 卡片标签
+  Comment:
+UniqueID:
+  Alias:
+  Note: 唯一标识
+  Comment:

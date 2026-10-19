@@ -37,6 +37,8 @@ dependencies {
     implementation(libs.coilNetworkOkhttp)
     // FileKit: native file/folder/save dialogs for Compose Multiplatform (no AWT/Swing dialogs).
     implementation(libs.filekitDialogsCompose)
+
+    testImplementation(kotlin("test"))
 }
 
 application {

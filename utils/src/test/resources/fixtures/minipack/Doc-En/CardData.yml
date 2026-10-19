@@ -1,0 +1,24 @@
+CardName:
+  Alias:
+  Note: Card name
+  Comment:
+CardDescription:
+  Alias:
+  Note: Card description
+  Comment:
+CardType:
+  Alias:
+  Note: Card type
+  Comment:
+ObjectWeight:
+  Alias:
+  Note: Card weight
+  Comment:
+CardTags:
+  Alias:
+  Note: Card tags
+  Comment:
+UniqueID:
+  Alias:
+  Note: Unique identifier
+  Comment:

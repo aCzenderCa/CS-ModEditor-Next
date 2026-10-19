@@ -1,0 +1,17 @@
+{
+  "CardName": {
+    "ParentObjectID": "33333333333333333333333333333333",
+    "LocalizationKey": "FixtureML_FixtureKnife_CardName",
+    "DefaultText": "Fixture Knife"
+  },
+  "CardDescription": {
+    "ParentObjectID": "33333333333333333333333333333333",
+    "LocalizationKey": "FixtureML_FixtureKnife_CardDescription",
+    "DefaultText": "A knife added by the ML fixture mod."
+  },
+  "CardType": 3,
+  "ObjectWeight": 0.4,
+  "CardTags": [],
+  "SpawningBlockedBy": [],
+  "UniqueID": "33333333333333333333333333333333"
+}

@@ -1,0 +1,15 @@
+{
+  "Namespace": "FixtureMc",
+  "Name": {
+    "En": "Fixture MC",
+    "SimpCn": "MC 测试 Mod"
+  },
+  "Description": {
+    "En": "An MC fixture mod.",
+    "SimpCn": "一个 MC 测试 Mod。"
+  },
+  "Author": "Fixture",
+  "Version": "1.0.0",
+  "Icon": "",
+  "PluginGuid": []
+}

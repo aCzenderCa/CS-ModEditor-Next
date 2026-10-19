@@ -1,0 +1,9 @@
+{
+  "InGameName": {
+    "ParentObjectID": "",
+    "LocalizationKey": "tag_Mini_InGameName",
+    "DefaultText": "Mini"
+  },
+  "UniqueOnBoard": false,
+  "ActionModifiers": []
+}

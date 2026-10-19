@@ -1,0 +1,9 @@
+{
+  "InGameName": {
+    "ParentObjectID": "",
+    "LocalizationKey": "FixtureML_tag_Fixture_InGameName",
+    "DefaultText": "Fixture Tag"
+  },
+  "UniqueOnBoard": false,
+  "ActionModifiers": []
+}
