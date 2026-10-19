@@ -35,6 +35,8 @@ dependencies {
     // Coil 3: asynchronous image loading (local files and, with the OkHttp fetcher, URLs).
     implementation(libs.coilCompose)
     implementation(libs.coilNetworkOkhttp)
+    // FileKit: native file/folder/save dialogs for Compose Multiplatform (no AWT/Swing dialogs).
+    implementation(libs.filekitDialogsCompose)
 }
 
 application {

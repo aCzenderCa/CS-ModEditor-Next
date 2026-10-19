@@ -1,5 +1,10 @@
 # CS-ModEditor-Next
 
+## 文档
+
+- [项目计划](项目计划.md)：数据包格式、ML/MC 加载逻辑、编辑器架构与依赖设计。
+- [进度检查点](进度检查点.md)：当前完成状态、验证记录、待办与风险。
+
 This project uses [Gradle](https://gradle.org/).
 To build and run the application, use the *Gradle* tool window by clicking the Gradle icon in the right-hand toolbar,
 or run it directly from the terminal:
