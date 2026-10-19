@@ -1,8 +1,10 @@
 dependencyResolutionManagement {
 
-    // Use Maven Central and the Gradle Plugin Portal for resolving dependencies in the shared build logic (`buildSrc`) project.
+    // Use Aliyun mirrors, falling back to Maven Central, for dependencies in the shared build logic (`buildSrc`) project.
     @Suppress("UnstableApiUsage")
     repositories {
+        maven("https://maven.aliyun.com/repository/public")
+        maven("https://maven.aliyun.com/repository/google")
         mavenCentral()
     }
 

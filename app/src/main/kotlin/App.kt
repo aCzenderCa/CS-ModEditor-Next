@@ -1,20 +1,57 @@
 package org.zender.app
 
-import org.zender.utils.Printer
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.application
 
-//TIP 要<b>运行</b>代码，请按 <shortcut actionId="Run"/> 或
-// 点击装订区域中的 <icon src="AllIcons.Actions.Execute"/> 图标。
-fun main() {
-    val name = "Kotlin"
-    //TIP 当文本光标位于高亮显示的文本处时按 <shortcut actionId="ShowIntentionActions"/>
-    // 查看 IntelliJ IDEA 建议如何修正。
-    val message = "Hello, " + name + "!"
-    val printer = Printer(message)
-    printer.printMessage()
+fun main() = application {
+    Window(
+        onCloseRequest = ::exitApplication,
+        title = "CS-ModEditor-Next",
+    ) {
+        MaterialTheme {
+            Surface(modifier = Modifier.fillMaxSize()) {
+                App()
+            }
+        }
+    }
+}
 
-    for (i in 1..5) {
-        //TIP 按 <shortcut actionId="Debug"/> 开始调试代码。我们已经设置了一个 <icon src="AllIcons.Debugger.Db_set_breakpoint"/> 断点
-        // 但您始终可以通过按 <shortcut actionId="ToggleLineBreakpoint"/> 添加更多断点。
-        println("i = $i")
+@Composable
+fun App() {
+    var count by remember { mutableIntStateOf(0) }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text = "Hello, Compose!",
+            style = MaterialTheme.typography.headlineMedium,
+        )
+        Text(
+            text = "点击次数：$count",
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.padding(16.dp),
+        )
+        Button(onClick = { count++ }) {
+            Text("点我")
+        }
     }
 }
