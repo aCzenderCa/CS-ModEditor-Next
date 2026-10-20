@@ -32,6 +32,27 @@ data class FavoriteField(
 )
 
 /**
+ * 最近打开的数据包目录记录。
+ *
+ * 保存路径与打开时读取到的元信息，设置页/数据包选择页无需重新扫描即可展示。
+ */
+@Serializable
+data class RecentPack(
+    val path: String,
+    val name: String = "",
+    val version: String = "",
+    val isMainPack: Boolean = false,
+    /** 最后打开时间，Unix 毫秒。0 表示旧数据或未知。 */
+    val lastOpenedEpochMillis: Long = 0L,
+) {
+    /** 没有记录名称时回退到目录名。 */
+    val displayName: String
+        get() = name.ifBlank {
+            runCatching { Paths.get(path).fileName?.toString().orEmpty() }.getOrDefault(path)
+        }
+}
+
+/**
  * 应用级持久化设置。所有列表都有上限，避免长期使用后无限增长。
  */
 @Serializable
@@ -42,6 +63,8 @@ data class AppSettings(
     val recentDirectories: List<String> = emptyList(),
     val recentProjects: List<String> = emptyList(),
     val recentPacks: Map<String, String> = emptyMap(),
+    /** 最近打开的数据包目录，按最后打开时间从新到旧排列。 */
+    val recentPackDirectories: List<RecentPack> = emptyList(),
     val language: String? = null,
 ) {
     fun withRecentDirectory(directory: Path, limit: Int = MAX_RECENT_ENTRIES): AppSettings =
@@ -52,6 +75,22 @@ data class AppSettings(
 
     fun withRecentPack(game: String, pack: Path): AppSettings =
         copy(recentPacks = recentPacks + (game to pack.toString()))
+
+    /**
+     * 把数据包目录移到最前；同一路径只保留最新一条。
+     */
+    fun withRecentPackDirectory(
+        pack: RecentPack,
+        limit: Int = MAX_RECENT_PACKS,
+    ): AppSettings =
+        copy(
+            recentPackDirectories = (
+                listOf(pack) + recentPackDirectories.filterNot { it.path == pack.path }
+            ).take(limit.coerceAtLeast(0)),
+        )
+
+    fun withoutRecentPackDirectory(path: String): AppSettings =
+        copy(recentPackDirectories = recentPackDirectories.filterNot { it.path == path })
 
     fun withFavoriteField(type: String, fieldPath: String): AppSettings {
         val favorite = FavoriteField(type, fieldPath)
@@ -64,6 +103,7 @@ data class AppSettings(
     companion object {
         const val CURRENT_SCHEMA_VERSION: Int = 1
         const val MAX_RECENT_ENTRIES: Int = 10
+        const val MAX_RECENT_PACKS: Int = 10
         const val MAX_FAVORITE_FIELDS: Int = 500
 
         private fun prependUnique(value: String, values: List<String>, limit: Int): List<String> =

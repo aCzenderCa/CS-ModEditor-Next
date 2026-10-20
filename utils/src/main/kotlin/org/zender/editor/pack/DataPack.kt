@@ -99,6 +99,8 @@ data class PackLoadResult(
 class DataPackLoader(
     private val fileStore: FileStore = AtomicFileStore(),
     private val logger: Logger = Log.getLogger("pack"),
+    /** 提供后在加载成功时记录数据包目录；为 null 时不做任何持久化。 */
+    private val historyStore: PackHistoryStore? = null,
 ) {
 
     fun load(
@@ -206,6 +208,14 @@ class DataPackLoader(
             diagnostics = diagnostics.toList(),
             fileStore = fileStore,
         )
+        // 历史记录失败不影响数据包本身可用。
+        val history = historyStore
+        if (history != null) {
+            runCatching { history.record(pack) }
+                .onFailure { error ->
+                    logger.warn("记录数据包目录失败：${error.message}", error)
+                }
+        }
         return PackLoadResult(pack = pack, diagnostics = diagnostics.toList())
     }
 }
