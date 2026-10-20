@@ -99,6 +99,36 @@ class SchemaRepository private constructor(
                 templateValue = templateValue,
                 documentation = documentation,
             )
+        }.toMutableList()
+
+        // CSFF 早期版本使用 DefaultEnvCards，后续改为 OldDefaultEnvCards + DefaultEnvCardDrops。
+        // 新 Schema 没有旧字段时补一个兼容字段，让旧工程/旧数据包仍能按引用列表编辑。
+        if (typeName == "CardData" && fields.none { it.name == "DefaultEnvCards" }) {
+            val oldEnvCards = fields.firstOrNull { it.name == "OldDefaultEnvCards" }
+            if (oldEnvCards != null) {
+                val offset = fields.indexOf(oldEnvCards) + 1
+                fields.add(
+                    offset,
+                    FieldSchema(
+                        name = "DefaultEnvCards",
+                        typeName = oldEnvCards.typeName,
+                        kind = FieldKind.LIST,
+                        elementTypeName = oldEnvCards.elementTypeName ?: oldEnvCards.typeName,
+                        elementKind = FieldKind.REFERENCE,
+                        templateValue = JsonNode.ArrayNode(emptyList()),
+                        documentation = FieldDocumentation(
+                            chinese = FieldNotes(
+                                alias = "环境卡牌（旧字段）",
+                                note = "CSFF 早期版本的 DefaultEnvCards；引用存放在 DefaultEnvCardsWarpData。",
+                            ),
+                            english = FieldNotes(
+                                alias = "Env Cards (Legacy)",
+                                note = "Legacy DefaultEnvCards field; references live in DefaultEnvCardsWarpData.",
+                            ),
+                        ),
+                    ),
+                )
+            }
         }
         return TypeSchema(typeName = typeName, fields = fields, template = template)
     }

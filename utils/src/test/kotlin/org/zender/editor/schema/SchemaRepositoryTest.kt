@@ -3,6 +3,9 @@ package org.zender.editor.schema
 import org.zender.editor.fixture.TestFixtures
 import org.zender.editor.io.AtomicFileStore
 import org.zender.editor.document.JsonNode
+import java.nio.file.Files
+import java.nio.file.Path
+import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -111,11 +114,48 @@ internal class SchemaRepositoryTest {
     }
 
     @Test
+    fun `CardData 自动兼容旧版 DefaultEnvCards 字段`() {
+        val root: Path = createTempDirectory("csmode-schema-legacy-")
+        try {
+            write(root, "TypeStruct/CardData.json", """{"Fields":{"CardName":"LocalizedString","OldDefaultEnvCards":"CardData","DefaultEnvCardDrops":"CardDrop"}}""")
+            write(root, "TypeStruct/LocalizedString.json", """{"Fields":{"DefaultText":"String"}}""")
+            write(root, "TypeStruct/CardDrop.json", """{"Fields":{"DroppedCard":"CardData"}}""")
+            write(root, "BaseJson/CardData.json", """{"CardName":{"DefaultText":""},"OldDefaultEnvCards":[],"DefaultEnvCardDrops":[]}""")
+            write(root, "BaseJson/LocalizedString.json", """{"DefaultText":""}""")
+            write(root, "BaseJson/CardDrop.json", """{"DroppedCard":{}}""")
+
+            val repository = SchemaRepository.load(
+                fileStore = AtomicFileStore(),
+                packRoot = root,
+                referenceTypes = setOf("CardData"),
+            ).repository
+            val schema = assertNotNull(repository.schema("CardData"))
+
+            assertEquals(
+                listOf("CardName", "OldDefaultEnvCards", "DefaultEnvCards", "DefaultEnvCardDrops"),
+                schema.fields.map { it.name },
+            )
+            val legacy = assertNotNull(schema.field("DefaultEnvCards"))
+            assertEquals(FieldKind.LIST, legacy.kind)
+            assertEquals("CardData", legacy.elementTypeName)
+            assertEquals(FieldKind.REFERENCE, legacy.elementKind)
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `模板值随字段保存`() {
         val schema = assertNotNull(loadRepository().schema("CardData"))
 
         assertEquals(JsonNode.NumberNode("0.0"), schema.field("ObjectWeight")?.templateValue)
         assertTrue(schema.field("CardTags")?.templateValue is JsonNode.ArrayNode)
         assertTrue(schema.field("CardName")?.templateValue is JsonNode.ObjectNode)
+    }
+
+    private fun write(root: Path, relative: String, text: String) {
+        val path = root.resolve(relative)
+        Files.createDirectories(path.parent)
+        Files.writeString(path, text)
     }
 }

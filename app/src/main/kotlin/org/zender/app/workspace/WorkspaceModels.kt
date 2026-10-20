@@ -6,6 +6,7 @@ import org.zender.editor.document.JsonDocument
 import org.zender.editor.document.JsonPath
 import org.zender.editor.document.RawJsonDocument
 import org.zender.editor.edit.WarpType
+import org.zender.editor.objects.ObjectKey
 import org.zender.editor.pack.DataPack
 import org.zender.editor.project.ProjectObjectKind
 import org.zender.editor.project.ValidationIssue
@@ -18,6 +19,7 @@ import org.zender.editor.window.WindowId
 /** 主工作区页面。文件 Tab 与这些页面互斥显示。 */
 enum class WorkspaceScreen {
     FILES,
+    STAR_MAP,
     LOCALIZATION,
     RESOURCES,
     EXPORT,
@@ -133,6 +135,12 @@ data class ReferenceDisplay(
     val warning: Boolean = false,
 )
 
+/** 请求星图定位到指定节点；[nonce] 保证重复定位同一对象也能触发一次新的滚动/选中。 */
+data class StarMapFocusRequest(
+    val key: ObjectKey,
+    val nonce: Long,
+)
+
 /** 工作区 UI 快照。所有字段都是不可变数据，Compose 只渲染该快照。 */
 data class WorkspaceUiState(
     val packRoot: java.nio.file.Path? = null,
@@ -150,6 +158,7 @@ data class WorkspaceUiState(
     val diagnostics: List<Diagnostic> = emptyList(),
     val settings: AppSettings = AppSettings(),
     val picker: PickerRequest? = null,
+    val starMapFocus: StarMapFocusRequest? = null,
     val detachedWindows: List<DetachedWindowUi> = emptyList(),
     val status: String = "就绪",
     val statusIsError: Boolean = false,

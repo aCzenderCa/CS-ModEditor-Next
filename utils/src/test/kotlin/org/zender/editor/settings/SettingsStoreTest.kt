@@ -57,6 +57,8 @@ internal class SettingsStoreTest {
             recentProjects = listOf("D:/projects/demo"),
             recentPacks = mapOf("csti" to "D:/packs/csti"),
             language = "zh-CN",
+            fileTreeWidth = 320f,
+            inspectorWidth = 360f,
         )
 
         store.save(original)

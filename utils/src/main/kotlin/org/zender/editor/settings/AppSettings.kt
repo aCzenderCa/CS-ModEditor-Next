@@ -93,6 +93,10 @@ data class AppSettings(
     val openProjectBehavior: String = "ASK",
     /** 多窗口布局：启动后打开工程时恢复内容键与几何。 */
     val detachedWindows: List<DetachedWindowSettings> = emptyList(),
+    /** 文件树分栏宽度（dp），拖动分隔线后保存。 */
+    val fileTreeWidth: Float = 260f,
+    /** 检查器分栏宽度（dp），拖动分隔线后保存。 */
+    val inspectorWidth: Float = 300f,
 ) {
     fun withRecentDirectory(directory: Path, limit: Int = MAX_RECENT_ENTRIES): AppSettings =
         copy(recentDirectories = prependUnique(directory.toString(), recentDirectories, limit))

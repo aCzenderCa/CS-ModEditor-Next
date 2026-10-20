@@ -7,6 +7,7 @@ import org.zender.editor.edit.WarpFields
 import org.zender.editor.framework.DecodedKey
 import org.zender.editor.framework.FrameworkId
 import org.zender.editor.framework.KeyCodec
+import org.zender.editor.objects.ObjectKey
 import org.zender.editor.objects.ReferenceKind
 import org.zender.editor.objects.ReferenceRule
 import org.zender.editor.pack.DataPack
@@ -29,6 +30,8 @@ sealed interface ReferenceCheck {
         val key: String,
         val targetType: String?,
         val origin: ReferenceOrigin,
+        /** 解析到的工程/数据包对象或资源键；供星图等调用方建立边。 */
+        val targetKey: ObjectKey? = null,
     ) : ReferenceCheck
 
     data class NotFound(
@@ -102,14 +105,26 @@ class ProjectReferenceResolver(
     private fun resolveGuid(fieldType: String, key: String): ReferenceCheck {
         project.workingTree.objectByGuid(key)?.let { entry ->
             return if (compatible(fieldType, entry.type, ReferenceKind.UNIQUE_ID)) {
-                ReferenceCheck.Resolved(fieldType, key, entry.type, ReferenceOrigin.PROJECT)
+                ReferenceCheck.Resolved(
+                    fieldType,
+                    key,
+                    entry.type,
+                    ReferenceOrigin.PROJECT,
+                    entry.key,
+                )
             } else {
                 ReferenceCheck.TypeMismatch(fieldType, key, entry.type)
             }
         }
         pack?.objectIndex?.findByGuid(key)?.let { entry ->
             return if (compatible(fieldType, entry.type, ReferenceKind.UNIQUE_ID)) {
-                ReferenceCheck.Resolved(fieldType, key, entry.type, ReferenceOrigin.BASE_PACK)
+                ReferenceCheck.Resolved(
+                    fieldType,
+                    key,
+                    entry.type,
+                    ReferenceOrigin.BASE_PACK,
+                    entry.key,
+                )
             } else {
                 ReferenceCheck.TypeMismatch(fieldType, key, entry.type)
             }
@@ -137,6 +152,7 @@ class ProjectReferenceResolver(
                 key,
                 entry.type,
                 ReferenceOrigin.PROJECT,
+                entry.key,
             )
         }
         val projectConflict = project.workingTree.objects.values.firstOrNull {
@@ -151,7 +167,13 @@ class ProjectReferenceResolver(
 
         pack?.objectIndex?.find(fieldType, targetName)?.let { entry ->
             return if (compatible(fieldType, entry.type, rule.kindFor(entry.type))) {
-                ReferenceCheck.Resolved(fieldType, key, entry.type, ReferenceOrigin.BASE_PACK)
+                ReferenceCheck.Resolved(
+                    fieldType,
+                    key,
+                    entry.type,
+                    ReferenceOrigin.BASE_PACK,
+                    entry.key,
+                )
             } else {
                 ReferenceCheck.TypeMismatch(fieldType, key, entry.type)
             }
@@ -188,6 +210,7 @@ class ProjectReferenceResolver(
                 key,
                 entry.typeName,
                 ReferenceOrigin.PROJECT_RESOURCE,
+                ObjectKey.of(entry.typeName, entry.key),
             )
         }
         if (!isExplicitSelfNamespace(decoded)) {
@@ -197,8 +220,25 @@ class ProjectReferenceResolver(
                     key,
                     entry.typeName,
                     ReferenceOrigin.BASE_PACK_RESOURCE,
+                    ObjectKey.of(entry.typeName, entry.key),
                 )
             }
+            // 游戏本体图片/音频通常只在 Name/<Type>.json 中，没有独立资源文件。
+            val expectedKind = when (kind) {
+                ResourceKind.IMAGE -> ReferenceKind.SPRITE
+                ResourceKind.AUDIO -> ReferenceKind.AUDIO
+            }
+            pack?.objectIndex?.findAllByName(targetName)
+                ?.firstOrNull { rule.kindFor(it.type) == expectedKind }
+                ?.let { entry ->
+                    return ReferenceCheck.Resolved(
+                        fieldType,
+                        key,
+                        entry.type,
+                        ReferenceOrigin.BASE_PACK_RESOURCE,
+                        entry.key,
+                    )
+                }
         }
         return ReferenceCheck.NotFound(fieldType, key)
     }
@@ -218,6 +258,7 @@ class ProjectReferenceResolver(
                 key,
                 entry.type,
                 ReferenceOrigin.PROJECT,
+                entry.key,
             )
         }
         pack?.objectIndex?.findByGuid(key)?.let { entry ->
@@ -229,6 +270,7 @@ class ProjectReferenceResolver(
                 key,
                 entry.type,
                 ReferenceOrigin.BASE_PACK,
+                entry.key,
             )
         }
 
@@ -254,22 +296,32 @@ class ProjectReferenceResolver(
         if (includePack) {
             pack?.objectIndex?.findAllByName(targetName)
                 ?.filter { !uniqueOnly || rule.kindFor(it.type) == ReferenceKind.UNIQUE_ID }
-                ?.forEach { candidates += Candidate.PackObject(it.type) }
+                ?.forEach { candidates += Candidate.PackObject(it.type, it.key) }
         }
 
         project.workingTree.objects.values
             .filter { it.name == targetName }
             .filter { !uniqueOnly || rule.kindFor(it.type) == ReferenceKind.UNIQUE_ID }
-            .forEach { candidates += Candidate.ProjectObject(it.type) }
+            .forEach { candidates += Candidate.ProjectObject(it.type, it.key) }
 
         if (includeResources) {
             if (includePack) {
                 pack?.resources?.findAll(targetName)
-                    ?.forEach { candidates += Candidate.PackResource(it.typeName) }
+                    ?.forEach {
+                        candidates += Candidate.PackResource(
+                            it.typeName,
+                            ObjectKey.of(it.typeName, it.key),
+                        )
+                    }
             }
             project.workingTree.resources.values
                 .filter { it.key == targetName }
-                .forEach { candidates += Candidate.ProjectResource(it.typeName) }
+                .forEach {
+                    candidates += Candidate.ProjectResource(
+                        it.typeName,
+                        ObjectKey.of(it.typeName, it.key),
+                    )
+                }
         }
 
         // 同名同类型从工程与数据包重复命中属于“遮蔽”而不是歧义，保留先加载的一项。
@@ -281,6 +333,7 @@ class ProjectReferenceResolver(
                 key,
                 distinct.single().typeName,
                 distinct.single().origin,
+                distinct.single().key,
             )
 
             else -> ReferenceCheck.Ambiguous(
@@ -342,20 +395,33 @@ class ProjectReferenceResolver(
     private sealed interface Candidate {
         val typeName: String
         val origin: ReferenceOrigin
+        val key: ObjectKey
 
-        data class ProjectObject(override val typeName: String) : Candidate {
+        data class ProjectObject(
+            override val typeName: String,
+            override val key: ObjectKey,
+        ) : Candidate {
             override val origin: ReferenceOrigin get() = ReferenceOrigin.PROJECT
         }
 
-        data class PackObject(override val typeName: String) : Candidate {
+        data class PackObject(
+            override val typeName: String,
+            override val key: ObjectKey,
+        ) : Candidate {
             override val origin: ReferenceOrigin get() = ReferenceOrigin.BASE_PACK
         }
 
-        data class ProjectResource(override val typeName: String) : Candidate {
+        data class ProjectResource(
+            override val typeName: String,
+            override val key: ObjectKey,
+        ) : Candidate {
             override val origin: ReferenceOrigin get() = ReferenceOrigin.PROJECT_RESOURCE
         }
 
-        data class PackResource(override val typeName: String) : Candidate {
+        data class PackResource(
+            override val typeName: String,
+            override val key: ObjectKey,
+        ) : Candidate {
             override val origin: ReferenceOrigin get() = ReferenceOrigin.BASE_PACK_RESOURCE
         }
     }

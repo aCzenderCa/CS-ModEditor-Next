@@ -75,6 +75,8 @@ class WorkspaceTestFixture private constructor(
             )
             write(root, "TypeStruct/Enum/CardTypes.json", """{"Item":0,"Base":1,"Event":3}""")
             write(root, "Name/CardTag.json", """{"tag_Test(测试标签)":"tag_Test"}""")
+            // 游戏本体图片通常只存在于 Name 索引，没有独立资源文件。
+            write(root, "Name/Sprite.json", """{"GameIcon(游戏图标)":"GameIcon"}""")
             write(
                 root,
                 "Objects/CardTag/tag_Test.json",

@@ -3,6 +3,7 @@ package org.zender.editor.field
 import org.zender.editor.document.JsonDocument
 import org.zender.editor.document.JsonNode
 import org.zender.editor.document.JsonPath
+import org.zender.editor.edit.WarpFields
 import org.zender.editor.schema.DefaultValueResolver
 import org.zender.editor.schema.FieldKind
 import org.zender.editor.schema.FieldSchema
@@ -91,8 +92,16 @@ class FieldProjectionService(
             if (!context.options.includeReadOnly && field.isReadOnly) continue
             val path = basePath.child(field.name)
             val value = node.get(field.name)
-            val isDefault = defaultValueResolver.isDefault(field, value)
-            if (!context.options.includeDefaults && isDefault) continue
+            // 引用字段的容器通常是 `{}` / `[]`，实际值在配对的 `XxxWarpData` 中。
+            // 有引用时必须视为非默认，否则关闭“默认值”后字段会连同引用一起消失。
+            val isDefault = defaultValueResolver.isDefault(field, value) &&
+                !hasWarpReferences(node, field)
+            // 收藏字段及其祖先始终保留，即使当前值等于模板默认值。
+            if (!context.options.includeDefaults && isDefault &&
+                !context.isFavoriteOrContainsFavorite(path)
+            ) {
+                continue
+            }
 
             rows += FieldRow(
                 path = path,
@@ -225,6 +234,21 @@ class FieldProjectionService(
         else -> emptyList()
     }
 
+    private fun hasWarpReferences(node: JsonNode.ObjectNode, field: FieldSchema): Boolean {
+        val data = node.get(WarpFields.dataName(field.name)) ?: return false
+        return when {
+            field.kind == FieldKind.REFERENCE ->
+                (data as? JsonNode.StringNode)?.value?.isNotBlank() == true
+
+            field.kind == FieldKind.LIST && field.elementKind == FieldKind.REFERENCE ->
+                (data as? JsonNode.ArrayNode)?.elements?.any {
+                    (it as? JsonNode.StringNode)?.value?.isNotBlank() == true
+                } == true
+
+            else -> false
+        }
+    }
+
     private fun unknownRows(
         node: JsonNode.ObjectNode,
         basePath: JsonPath,
@@ -289,6 +313,20 @@ class FieldProjectionService(
             if (favorites.isEmpty()) return false
             val text = path.format()
             return favorites.any { it.type == favoriteType && it.fieldPath == text }
+        }
+
+        /** 当前路径是收藏字段，或收藏字段位于其子路径。 */
+        fun isFavoriteOrContainsFavorite(path: JsonPath): Boolean {
+            if (favorites.isEmpty()) return false
+            val text = path.format()
+            return favorites.any { favorite ->
+                favorite.type == favoriteType &&
+                    (
+                        favorite.fieldPath == text ||
+                            favorite.fieldPath.startsWith("$text.") ||
+                            favorite.fieldPath.startsWith("$text[")
+                        )
+            }
         }
     }
 }

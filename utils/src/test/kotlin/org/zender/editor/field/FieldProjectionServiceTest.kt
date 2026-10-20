@@ -203,6 +203,44 @@ internal class FieldProjectionServiceTest {
     }
 
     @Test
+    fun `关闭默认值显示时收藏字段及其祖先仍然保留`() {
+        val template = assertNotNull(repository.template("CardData"))
+        val result = service.project(
+            JsonDocument(template),
+            "CardData",
+            FieldProjectionOptions(
+                includeDefaults = false,
+                favorites = setOf(
+                    FavoriteField("CardData", "CardType"),
+                    FavoriteField("CardData", "CardName.DefaultText"),
+                ),
+                favoriteTypeName = "CardData",
+            ),
+        )
+
+        assertNotNull(result.rows.find { it.name == "CardType" })
+        val cardName = assertNotNull(result.rows.find { it.name == "CardName" })
+        assertTrue(cardName.children.any { it.name == "DefaultText" && it.isFavorite })
+        assertTrue(result.rows.none { it.name == "CardTags" })
+    }
+
+    @Test
+    fun `引用列表的 WarpData 非空时即使容器为空也保留字段`() {
+        val document = JsonDocument.parseOrThrow(
+            """{"CardTags":[],"CardTagsWarpData":["tag_Mini"],"CardTagsWarpType":3}""",
+        )
+        val result = service.project(
+            document,
+            "CardData",
+            FieldProjectionOptions(includeDefaults = false),
+        )
+
+        val tags = assertNotNull(result.rows.find { it.name == "CardTags" })
+        assertFalse(tags.isDefault)
+        assertTrue(tags.isModified)
+    }
+
+    @Test
     fun `根节点不是对象时返回问题`() {
         val result = service.project(JsonDocument.parseOrThrow("[1,2]"), "CardData")
 

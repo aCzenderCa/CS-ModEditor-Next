@@ -85,8 +85,12 @@ fun WorkspaceShell(
     var dontAskAgain by remember { mutableStateOf(false) }
     val themeMode = ThemeMode.fromStorage(state.settings.themeMode)
     val darkTheme = ThemeMode.resolvedDark(themeMode, isSystemInDarkTheme())
-    var treeWidth by remember { mutableStateOf(260.dp) }
-    var inspectorWidth by remember { mutableStateOf(300.dp) }
+    var treeWidth by remember {
+        mutableStateOf(state.settings.fileTreeWidth.coerceIn(MIN_TREE_WIDTH, 900f).dp)
+    }
+    var inspectorWidth by remember {
+        mutableStateOf(state.settings.inspectorWidth.coerceIn(MIN_INSPECTOR_WIDTH, 900f).dp)
+    }
 
     fun loadProjectPath(path: Path) {
         scope.launch { controller.loadProject(path) }
@@ -177,11 +181,16 @@ fun WorkspaceShell(
                             state = state,
                             modifier = Modifier.width(treeWidth).fillMaxHeight(),
                         )
-                        ResizableSplitter { delta ->
-                            treeWidth = (treeWidth.value + delta)
-                                .coerceIn(MIN_TREE_WIDTH, maxTreeWidth)
-                                .dp
-                        }
+                        ResizableSplitter(
+                            onDrag = { delta ->
+                                treeWidth = (treeWidth.value + delta)
+                                    .coerceIn(MIN_TREE_WIDTH, maxTreeWidth)
+                                    .dp
+                            },
+                            onDragEnd = {
+                                controller.setPaneWidths(treeWidth.value, inspectorWidth.value)
+                            },
+                        )
                         Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
                             FileTabBar(
                                 controller = controller,
@@ -205,11 +214,16 @@ fun WorkspaceShell(
                                 )
                             }
                         }
-                        ResizableSplitter { delta ->
-                            inspectorWidth = (inspectorWidth.value - delta)
-                                .coerceIn(MIN_INSPECTOR_WIDTH, maxInspectorWidth)
-                                .dp
-                        }
+                        ResizableSplitter(
+                            onDrag = { delta ->
+                                inspectorWidth = (inspectorWidth.value - delta)
+                                    .coerceIn(MIN_INSPECTOR_WIDTH, maxInspectorWidth)
+                                    .dp
+                            },
+                            onDragEnd = {
+                                controller.setPaneWidths(treeWidth.value, inspectorWidth.value)
+                            },
+                        )
                         InspectorPane(
                             controller = controller,
                             state = state,
@@ -219,6 +233,7 @@ fun WorkspaceShell(
                 }
             }
 
+            WorkspaceScreen.STAR_MAP -> StarMapPage(controller, state)
             WorkspaceScreen.LOCALIZATION -> LocalizationPage(controller, state)
             WorkspaceScreen.RESOURCES -> ResourcePage(controller, state, filePicker)
             WorkspaceScreen.EXPORT -> ExportPage(controller, state, filePicker)
@@ -576,9 +591,13 @@ private const val SPLITTER_WIDTH = 8f
  * 可拖动的竖向分隔线。左右拖动会回调 dp 增量。
  */
 @Composable
-private fun ResizableSplitter(onDrag: (Float) -> Unit) {
+private fun ResizableSplitter(
+    onDrag: (Float) -> Unit,
+    onDragEnd: () -> Unit = {},
+) {
     val density = LocalDensity.current
     val currentOnDrag by rememberUpdatedState(onDrag)
+    val currentOnDragEnd by rememberUpdatedState(onDragEnd)
     val cursor = remember { PointerIcon(Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR)) }
     Box(
         modifier = Modifier
@@ -586,7 +605,9 @@ private fun ResizableSplitter(onDrag: (Float) -> Unit) {
             .width(SPLITTER_WIDTH.dp)
             .pointerHoverIcon(cursor)
             .pointerInput(density) {
-                detectHorizontalDragGestures { change, dragAmount ->
+                detectHorizontalDragGestures(
+                    onDragEnd = { currentOnDragEnd() },
+                ) { change, dragAmount ->
                     change.consume()
                     currentOnDrag(with(density) { dragAmount.toDp().value })
                 }
@@ -604,6 +625,7 @@ private fun ResizableSplitter(onDrag: (Float) -> Unit) {
 
 private fun screenTabs(): List<Pair<WorkspaceScreen, String>> = listOf(
     WorkspaceScreen.FILES to "文件",
+    WorkspaceScreen.STAR_MAP to "星图",
     WorkspaceScreen.LOCALIZATION to "本地化",
     WorkspaceScreen.RESOURCES to "资源",
     WorkspaceScreen.EXPORT to "导出",

@@ -7,6 +7,7 @@ enum class FileTreeNodeKind {
     METADATA,
     GROUP,
     OBJECT,
+    PACK_OBJECT,
     GAME_SOURCE_MODIFY,
     DATA_OBJECT_MODIFY,
     LOCALIZATION,
@@ -35,6 +36,8 @@ data class FileTreeFilter(
     /** 只显示指定对象类型；null 表示不过滤。 */
     val type: String? = null,
     val patchesOnly: Boolean = false,
+    /** 显示数据包 `Name` 索引中的非 GUID 对象（只读）。 */
+    val includePackObjects: Boolean = false,
 )
 
 /**
@@ -184,6 +187,41 @@ object FileTreeBuilder {
             )
         }
 
+        if (!filter.patchesOnly && filter.includePackObjects) {
+            val packTypes = pack?.objectIndex?.referenceTypes.orEmpty().sorted()
+            val typeGroups = packTypes.mapNotNull { type ->
+                val entries = pack?.objectIndex?.entriesOfType(type).orEmpty()
+                if (entries.isEmpty()) return@mapNotNull null
+                FileTreeNode(
+                    id = "pack:group:$type",
+                    label = type,
+                    detail = "${entries.size}",
+                    kind = FileTreeNodeKind.GROUP,
+                    type = type,
+                    children = entries.sortedBy { it.name }.map { entry ->
+                        FileTreeNode(
+                            id = "pack:${entry.type}/${entry.name}",
+                            label = entry.name,
+                            detail = entry.displayName?.takeIf { it.isNotBlank() }
+                                ?: if (entry.hasDataFile) "只读" else "仅索引",
+                            kind = FileTreeNodeKind.PACK_OBJECT,
+                            type = entry.type,
+                            name = entry.name,
+                        )
+                    },
+                )
+            }
+            if (typeGroups.isNotEmpty()) {
+                nodes += FileTreeNode(
+                    id = "group:pack",
+                    label = "数据包引用对象（只读）",
+                    detail = "${typeGroups.sumOf { it.children.size }}",
+                    kind = FileTreeNodeKind.GROUP,
+                    children = typeGroups,
+                )
+            }
+        }
+
         return filter(nodes, filter)
     }
 
@@ -205,7 +243,11 @@ object FileTreeBuilder {
         }
 
         fun visit(node: FileTreeNode): FileTreeNode? {
-            if (type != null && node.kind == FileTreeNodeKind.OBJECT && node.type != type) {
+            if (type != null &&
+                (node.kind == FileTreeNodeKind.OBJECT ||
+                    node.kind == FileTreeNodeKind.PACK_OBJECT) &&
+                node.type != type
+            ) {
                 return null
             }
             val children = node.children.mapNotNull(::visit)

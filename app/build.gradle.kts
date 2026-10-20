@@ -1,3 +1,7 @@
+import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
+import java.util.Properties
+
 plugins {
     // Apply the shared build logic from a convention plugin.
     // The shared code is located in `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`.
@@ -7,9 +11,6 @@ plugins {
     alias(libs.plugins.composeMultiplatform)
     // The Compose compiler plugin is required since Kotlin 2.0 to compile @Composable functions.
     alias(libs.plugins.composeCompiler)
-
-    // Apply the Application plugin to add support for building an executable JVM application.
-    application
 }
 
 dependencies {
@@ -41,18 +42,65 @@ dependencies {
     testImplementation(kotlin("test"))
 }
 
-application {
-    // Define the Fully Qualified Name for the application main class
-    // (Note that Kotlin compiles `App.kt` to a class with FQN `com.example.app.AppKt`.)
-    mainClass = "org.zender.app.AppKt"
-}
-
-distributions {
-    main {
-        contents {
-            // Some JetBrains AndroidX ports ship a forwarding jar with the same file name
-            // as the AndroidX implementation jar. Keep the first one and skip the stub.
-            duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+compose.desktop {
+    application {
+        mainClass = "org.zender.app.AppKt"
+        buildTypes.release.proguard {
+            // 补充 OkHttp 可选平台实现与 JNA 反射绑定规则。
+            configurationFiles.from(project.file("proguard-rules.pro"))
+        }
+        nativeDistributions {
+            // 只生成 Windows 单文件安装器（内置运行时，无需用户预装 JRE）。
+            // 需要 WiX Toolset 3.x；Compose Desktop 通过 jpackage 生成 exe。
+            targetFormats(TargetFormat.Exe)
+            packageName = "CS-ModEditor-Next"
+            packageVersion = "1.0.0"
+            description = "Card Survival Mod Editor (Next)"
+            vendor = "zender"
+            copyright = "Copyright © 2026 zender"
+            windows {
+                menu = true
+                shortcut = true
+                dirChooser = true
+                perUserInstall = true
+            }
         }
     }
 }
+
+/**
+ * WiX Toolset 路径：优先使用 WIX_PATH 环境变量，其次读取 local.properties 的 wix.dir。
+ * gradle.properties 已关闭自动下载，避免每次构建重复下载或使用损坏的缓存。
+ */
+val localWixDir = rootProject.file("local.properties")
+    .takeIf { it.isFile }
+    ?.let { propertiesFile ->
+        Properties().apply {
+            propertiesFile.inputStream().use { load(it) }
+        }.getProperty("wix.dir")
+    }
+    ?.takeIf { it.isNotBlank() }
+    ?.let { file(it) }
+val wixDir = providers.environmentVariable("WIX_PATH").orNull?.let { file(it) } ?: localWixDir
+if (wixDir != null && wixDir.isDirectory) {
+    tasks.withType<AbstractJPackageTask>().configureEach {
+        // createDistributable(AppImage) 与 Exe/Msi 一样属于 Windows 打包任务，
+        // 插件在关闭自动下载后不会为它们注入 WiX 路径，这里统一补齐。
+        if (targetFormat.isCompatibleWithCurrentOS) {
+            wixToolsetDir.set(wixDir)
+        }
+    }
+}
+
+/**
+ * 便捷任务：生成 Windows .exe 安装器。
+ * 产物位于 build/compose/binaries/main/exe。
+ */
+tasks.register("packageAppExe") {
+    group = "distribution"
+    description = "Build a release Windows .exe installer with bundled runtime (build/compose/binaries/main-release/exe)"
+    dependsOn("packageReleaseExe")
+}
+
+// Compose Desktop 的 nativeDistributions 负责打包与分发；
+// `./gradlew :app:run` 由 Compose Desktop 插件提供。

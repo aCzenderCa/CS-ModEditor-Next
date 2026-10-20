@@ -30,6 +30,8 @@ import org.zender.editor.field.FieldEditorInfo
 import org.zender.editor.field.FieldSchemaLocator
 import org.zender.editor.field.FavoriteFieldStore
 import org.zender.editor.framework.FrameworkId
+import org.zender.editor.graph.GraphNode
+import org.zender.editor.graph.GraphNodeOrigin
 import org.zender.editor.io.AtomicFileStore
 import org.zender.editor.io.FileStore
 import org.zender.editor.io.resolveWithin
@@ -52,7 +54,9 @@ import org.zender.editor.project.ModProject
 import org.zender.editor.project.ModProjectLoader
 import org.zender.editor.project.ModProjectWriter
 import org.zender.editor.project.ModValidator
+import org.zender.editor.project.NewObjectRequest
 import org.zender.editor.project.ProjectObject
+import org.zender.editor.project.ProjectObjectFactory
 import org.zender.editor.project.ProjectObjectKind
 import org.zender.editor.project.ProjectReferenceResolver
 import org.zender.editor.project.ReferenceCheck
@@ -105,6 +109,8 @@ class WorkspaceController(
     private var fieldOptions = FieldViewOptions()
     private var screen = WorkspaceScreen.FILES
     private var picker: PickerRequest? = null
+    private var starMapFocus: StarMapFocusRequest? = null
+    private var starMapFocusNonce = 0L
     private var status = "就绪"
     private var statusIsError = false
     private var busy = false
@@ -280,6 +286,70 @@ class WorkspaceController(
     }
 
     // ---------------------------------------------------------------- 打开文档
+
+    fun inferObjectKind(type: String): ProjectObjectKind =
+        ProjectObjectFactory.inferKind(pack, type)
+
+    /**
+     * 新建工程对象并打开；UniqueID 对象自动生成 GUID，名称冲突直接失败。
+     */
+    fun createProjectObject(
+        type: String,
+        name: String?,
+        kind: ProjectObjectKind? = null,
+        group: String? = null,
+        sourceDocument: org.zender.editor.document.JsonDocument? = null,
+    ): ProjectObject? {
+        val current = project ?: run {
+            fail("尚未打开工程")
+            return null
+        }
+        val result = ProjectObjectFactory(pack).create(
+            current,
+            NewObjectRequest(
+                type = type,
+                name = name,
+                kind = kind,
+                group = group,
+                sourceDocument = sourceDocument,
+            ),
+        )
+        diagnostics = result.diagnostics
+        val created = result.objectEntry
+        if (created == null) {
+            fail(result.diagnostics.firstOrNull { it.isError }?.message ?: "新建对象失败")
+            return null
+        }
+        project = result.project
+        session.markProjectDirty()
+        status = "已新建对象：${created.type}/${created.name}"
+        statusIsError = false
+        refresh()
+        openProjectObject(created)
+        return created
+    }
+
+    /** 生成一个当前工程中不冲突的对象名。 */
+    fun suggestObjectName(type: String, base: String): String {
+        val current = project ?: return base
+        val seed = base.ifBlank { "New$type" }
+        if (current.workingTree.objectOf(type, seed) == null) return seed
+        for (index in 2..1_000) {
+            val candidate = "$seed$index"
+            if (current.workingTree.objectOf(type, candidate) == null) return candidate
+        }
+        return seed
+    }
+
+    /** 读取数据包对象原文并解析，供“从数据包对象复制”使用。 */
+    fun readPackObjectDocument(type: String, name: String): JsonDocument? {
+        val currentPack = pack ?: return null
+        val entry = currentPack.objectEntry(type, name) ?: return null
+        if (!entry.hasDataFile) return null
+        return runCatching { currentPack.readObject(entry) }
+            .onFailure { logger.warn("读取数据包对象失败：$type/$name", it) }
+            .getOrNull()
+    }
 
     fun openObject(type: String, name: String): Boolean {
         val entry = project?.objectOf(type, name)
@@ -843,10 +913,14 @@ class WorkspaceController(
             resolved = false,
         )
         val key = try {
-            if (item.isResource) {
-                current.keyCodec.encodeResourceKey(item.name)
-            } else {
-                current.keyCodec.encodeReference(
+            when {
+                item.origin == EntryOrigin.BASE_PACK &&
+                    (item.referenceKind == ReferenceKind.SPRITE ||
+                        item.referenceKind == ReferenceKind.AUDIO) -> item.name
+
+                item.isResource -> current.keyCodec.encodeResourceKey(item.name)
+
+                else -> current.keyCodec.encodeReference(
                     ObjectKey.of(item.type, item.name, item.uniqueId),
                     item.referenceKind,
                 )
@@ -988,10 +1062,16 @@ class WorkspaceController(
     ): Boolean {
         val target = requireEditableTarget(request.documentId) ?: return false
         val key = try {
-            if (item.isResource) {
-                current.keyCodec.encodeResourceKey(item.name)
-            } else {
-                current.keyCodec.encodeReference(
+            when {
+                // 数据包内置图片/音频没有独立文件，键是 Name 索引中的裸名称；
+                // MC 不能给它们加当前 Mod 的 Namespace。
+                item.origin == EntryOrigin.BASE_PACK &&
+                    (item.referenceKind == ReferenceKind.SPRITE ||
+                        item.referenceKind == ReferenceKind.AUDIO) -> item.name
+
+                item.isResource -> current.keyCodec.encodeResourceKey(item.name)
+
+                else -> current.keyCodec.encodeReference(
                     ObjectKey.of(item.type, item.name, item.uniqueId),
                     item.referenceKind,
                 )
@@ -1047,7 +1127,13 @@ class WorkspaceController(
             ),
         )?.items.orEmpty()
         packItems.filter { item ->
-            if (request.kind == PickerWindowKind.RESOURCE) item.isResource else !item.isResource
+            if (request.kind == PickerWindowKind.RESOURCE) {
+                item.isResource ||
+                    item.referenceKind == ReferenceKind.SPRITE ||
+                    item.referenceKind == ReferenceKind.AUDIO
+            } else {
+                !item.isResource
+            }
         }.forEach { items += it }
 
         val projectAllowed = origin == null || origin == EntryOrigin.PROJECT
@@ -1240,10 +1326,199 @@ class WorkspaceController(
 
     // ---------------------------------------------------------------- 选择与视图状态
 
-    fun selectField(documentId: DocumentId, path: JsonPath) {
-        session.selectField(FieldRef(documentId, path))
+    /**
+     * 选择字段。[reference] 为 true 时同时记录为最近聚焦的引用字段，
+     * 供星图拖放/选择器提交使用。
+     */
+    fun selectField(documentId: DocumentId, path: JsonPath, reference: Boolean = false) {
+        val ref = FieldRef(documentId, path)
+        session.selectField(ref)
+        if (reference) session.focusReferenceField(ref)
         session.endMergeGroup(documentId)
         refresh()
+    }
+
+    /** 打开星图节点对应的文档；资源/未解析节点返回 false。 */
+    /** 解析引用键对应的工程/数据包对象或资源键。 */
+    private fun referenceTargetKey(
+        fieldType: String,
+        key: String,
+        readOnly: Boolean,
+    ): ObjectKey? {
+        val current = project
+        val currentPack = pack
+        if (current != null && !readOnly) {
+            val check = ProjectReferenceResolver(current, currentPack).resolve(fieldType, key)
+            if (check is ReferenceCheck.Resolved) return check.targetKey
+        }
+        return when (val resolution = currentPack?.referenceIndex?.resolveRaw(fieldType, key)) {
+            is ReferenceResolution.Resolved -> resolution.entry.key
+            is ReferenceResolution.ResolvedResource ->
+                ObjectKey.of(resolution.entry.typeName, resolution.entry.key)
+
+            else -> null
+        }
+    }
+
+    /** 从引用字段/列表元素打开目标对象到文件 Tab。 */
+    fun openReferenceInTab(
+        fieldType: String,
+        key: String,
+        readOnly: Boolean = false,
+    ): Boolean {
+        val target = referenceTargetKey(fieldType, key, readOnly)
+            ?: return fail("无法解析引用目标：$key")
+        project?.workingTree?.objects?.get(target)?.let { entry ->
+            return openProjectObject(entry)
+        }
+        val entry = pack?.objectEntry(target.type, target.name)
+            ?: return fail("引用目标不存在：${target.type}/${target.name}")
+        if (!entry.hasDataFile) {
+            return fail("引用目标 ${target.type}/${target.name} 只有索引，没有可打开的数据文件")
+        }
+        return openPackObject(target.type, target.name)
+    }
+
+    /** 切换到星图并选中引用目标。 */
+    fun focusReferenceInStarMap(
+        fieldType: String,
+        key: String,
+        readOnly: Boolean = false,
+    ): Boolean {
+        val target = referenceTargetKey(fieldType, key, readOnly)
+            ?: return fail("无法解析引用目标：$key")
+        starMapFocusNonce += 1
+        starMapFocus = StarMapFocusRequest(target, starMapFocusNonce)
+        screen = WorkspaceScreen.STAR_MAP
+        status = "星图定位：${target.type}/${target.name}"
+        statusIsError = false
+        refresh()
+        return true
+    }
+
+    fun openGraphNode(node: GraphNode): Boolean {
+        return when (node.origin) {
+            GraphNodeOrigin.PROJECT_ADDED,
+            GraphNodeOrigin.PROJECT_MODIFIED,
+            -> if (project?.objectOf(node.key.type, node.key.name) != null) {
+                openObject(node.key.type, node.key.name)
+            } else {
+                openPackObject(node.key.type, node.key.name)
+            }
+
+            GraphNodeOrigin.BASE_TARGET ->
+                openPackObject(node.key.type, node.key.name)
+
+            GraphNodeOrigin.RESOURCE ->
+                fail("资源节点不提供字段编辑")
+
+            GraphNodeOrigin.UNRESOLVED ->
+                fail("未解析节点没有可用文档")
+        }
+    }
+
+    /**
+     * 把星图节点作为引用写入最近聚焦的引用字段/引用列表。
+     */
+    fun applyGraphReference(node: GraphNode, fieldRef: FieldRef): Boolean {
+        val current = project ?: return fail("尚未打开工程")
+        val target = requireEditableTarget(fieldRef.documentId) ?: return false
+        val info = fieldInfo(fieldRef.documentId, fieldRef.path)
+            ?: return fail("目标字段不可用")
+        val isList = info.isReferenceList
+        if (!isList && !info.isReference) {
+            return fail("目标字段不是引用字段：${fieldRef.path.format()}")
+        }
+        if (!isList && target.isPatch && current.framework == FrameworkId.MC) {
+            return fail("MC 补丁的标量引用不会被运行时处理，请使用 \$override 或列表引用")
+        }
+
+        val fieldType = if (isList) {
+            info.schemaField.elementTypeName ?: info.typeName ?: info.schemaField.typeName
+        } else {
+            info.typeName ?: info.schemaField.typeName
+        }
+        val kind = if (node.origin == GraphNodeOrigin.RESOURCE) {
+            if (node.key.type == "AudioClip") ReferenceKind.AUDIO else ReferenceKind.SPRITE
+        } else {
+            (pack ?: current.basePack)?.referenceRule?.kindFor(node.key.type)
+                ?: if (node.key.uniqueId != null) ReferenceKind.UNIQUE_ID else ReferenceKind.PLAIN_OBJECT
+        }
+        val key = try {
+            if (node.origin == GraphNodeOrigin.RESOURCE) {
+                val resourceKind = if (node.key.type == "AudioClip") {
+                    ResourceKind.AUDIO
+                } else {
+                    ResourceKind.IMAGE
+                }
+                val projectResource = current.workingTree.resource(resourceKind, node.key.name)
+                if (projectResource != null) {
+                    current.keyCodec.encodeResourceKey(node.key.name)
+                } else {
+                    // 数据包内置图片/音频使用裸名称。
+                    node.key.name
+                }
+            } else {
+                current.keyCodec.encodeReference(node.key, kind)
+            }
+        } catch (e: Exception) {
+            return fail("无法生成引用键：${e.message}")
+        }
+        when (val check = ProjectReferenceResolver(current, pack ?: current.basePack)
+            .resolve(fieldType, key)
+        ) {
+            is ReferenceCheck.Resolved,
+            is ReferenceCheck.Unverified,
+            -> Unit
+
+            is ReferenceCheck.TypeMismatch ->
+                return fail("引用类型不兼容：${check.targetType} -> $fieldType")
+
+            is ReferenceCheck.Ambiguous ->
+                return fail("引用存在多个候选：${check.candidates.joinToString("、")}")
+
+            is ReferenceCheck.NotFound ->
+                return fail("引用目标不存在：$key")
+        }
+
+        val warpType = if (isList && target.isPatch) {
+            WarpType.ADD_REFERENCE
+        } else {
+            WarpType.REFERENCE
+        }
+        val command: EditCommand = if (isList) {
+            AddReferenceToListCommand(
+                label = "星图添加引用",
+                listFieldPath = fieldRef.path,
+                referenceKey = key,
+                warpType = warpType,
+            )
+        } else {
+            SetReferenceCommand(
+                label = "星图设置引用",
+                fieldPath = fieldRef.path,
+                referenceKey = key,
+                warpType = warpType,
+            )
+        }
+        val ok = executeCommand(fieldRef.documentId, command)
+        if (ok) {
+            status = "已写入引用：$key → ${fieldRef.path.format()}"
+            statusIsError = false
+            refresh()
+        }
+        return ok
+    }
+
+    fun graphResourcePath(node: GraphNode): Path? {
+        if (node.origin != GraphNodeOrigin.RESOURCE) return null
+        project?.workingTree?.resources?.values
+            ?.firstOrNull { it.key == node.key.name }
+            ?.let { resource ->
+                return resource.sourcePath ?: projectRoot?.resolve(resource.relativePath)
+            }
+        val entry = pack?.resources?.find(node.key.name) ?: return null
+        return packRoot?.resolve(entry.relativePath)
     }
 
     fun setScreen(value: WorkspaceScreen) {
@@ -1311,6 +1586,18 @@ class WorkspaceController(
             status = "界面语言偏好已保存"
             statusIsError = false
         }.onFailure { fail("保存语言失败：${it.message}") }
+        refresh()
+    }
+
+    /** 持久化工作区三栏宽度（文件树 / 编辑器 / 检查器）。 */
+    fun setPaneWidths(fileTreeWidth: Float, inspectorWidth: Float) {
+        if (!fileTreeWidth.isFinite() || !inspectorWidth.isFinite()) return
+        val tree = fileTreeWidth.coerceAtLeast(1f)
+        val inspector = inspectorWidth.coerceAtLeast(1f)
+        if (settings.fileTreeWidth == tree && settings.inspectorWidth == inspector) return
+        settings = settingsStore.update {
+            it.copy(fileTreeWidth = tree, inspectorWidth = inspector)
+        }
         refresh()
     }
 
@@ -1530,6 +1817,7 @@ class WorkspaceController(
             diagnostics = diagnostics,
             settings = settings,
             picker = picker,
+            starMapFocus = starMapFocus,
             detachedWindows = windowManager.currentState.windows.mapNotNull { window ->
                 val documentId = windowDocuments[window.id] ?: return@mapNotNull null
                 DetachedWindowUi(

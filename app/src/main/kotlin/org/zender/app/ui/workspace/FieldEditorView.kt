@@ -28,6 +28,7 @@ import androidx.compose.material.icons.outlined.Clear
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.Checkbox
@@ -311,6 +312,9 @@ private fun FieldRowItem(
     val editable = !target.readOnly && !row.isReadOnly
     val selected = state.session.selection.currentField == FieldRef(documentId, row.path)
     val pathText = row.path.format()
+    val translatedName = info?.let { fieldInfo ->
+        !fieldInfo.isElement && fieldInfo.schemaField.displayName() != fieldInfo.schemaField.name
+    } == true
 
     Column(
         modifier = Modifier
@@ -318,7 +322,13 @@ private fun FieldRowItem(
             .background(
                 if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f) else Color.Transparent,
             )
-            .clickable { controller.selectField(documentId, row.path) }
+            .clickable {
+                controller.selectField(
+                    documentId = documentId,
+                    path = row.path,
+                    reference = info?.isReference == true || info?.isReferenceList == true,
+                )
+            }
             .padding(vertical = 4.dp),
     ) {
         Row(
@@ -378,7 +388,7 @@ private fun FieldRowItem(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (displayPath) {
+                    if (displayPath || (translatedName && !row.isUnknown)) {
                         Text(
                             text = row.path.format(),
                             style = MaterialTheme.typography.labelSmall,
@@ -424,7 +434,10 @@ private fun FieldRowItem(
                         editable = editable,
                     )
 
-                    info.kind == FieldKind.OBJECT -> ObjectValue(row)
+                    info.kind == FieldKind.OBJECT -> ObjectValue(
+                        row = row,
+                        nameText = nameLikeFieldText(row, state),
+                    )
                     info.kind == FieldKind.LIST -> ListValue(
                         controller = controller,
                         state = state,
@@ -518,13 +531,70 @@ private fun typeLabel(row: FieldRow, info: FieldEditorInfo?): String {
     }
 }
 
+/**
+ * 对象字段右侧的摘要：优先显示其“类 Name”字段（Name/CardName/InGameName 等）的内容。
+ */
+private fun nameLikeFieldText(row: FieldRow, state: WorkspaceUiState): String? {
+    val objectNode = row.value as? JsonNode.ObjectNode ?: return null
+    val candidates = objectNode.members
+        .map { it.name }
+        .filter { it == "Name" || it.endsWith("Name") }
+        .distinct()
+        .sortedBy { name ->
+            when (name) {
+                "Name" -> 0
+                "CardName" -> 1
+                "InGameName" -> 2
+                "DisplayName" -> 3
+                else -> 4
+            }
+        }
+    for (name in candidates) {
+        val text = when (val node = objectNode.get(name)) {
+            is JsonNode.StringNode -> node.value.trim().takeIf { it.isNotEmpty() }
+            is JsonNode.ObjectNode -> {
+                val key = (node.get("LocalizationKey") as? JsonNode.StringNode)
+                    ?.value
+                    ?.takeIf { it.isNotBlank() }
+                val projectEntry = key?.let { state.project?.workingTree?.localization?.entry(it) }
+                val localized = projectEntry?.chinese?.takeIf { it.isNotBlank() }
+                    ?: state.pack?.localization?.chinese(key.orEmpty())?.takeIf { it.isNotBlank() }
+                    ?: projectEntry?.english?.takeIf { it.isNotBlank() }
+                    ?: state.pack?.localization?.english(key.orEmpty())?.takeIf { it.isNotBlank() }
+                localized ?: (node.get("DefaultText") as? JsonNode.StringNode)
+                    ?.value
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() }
+            }
+
+            else -> null
+        }
+        if (text != null) return text
+    }
+    return null
+}
+
 @Composable
-private fun ObjectValue(row: FieldRow) {
-    Text(
-        text = "对象 · ${row.childCount} 个字段",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+private fun ObjectValue(row: FieldRow, nameText: String?) {
+    Column {
+        if (nameText != null) {
+            Text(
+                text = nameText,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Text(
+            text = "对象 · ${row.childCount} 个字段",
+            style = if (nameText != null) {
+                MaterialTheme.typography.labelSmall
+            } else {
+                MaterialTheme.typography.bodySmall
+            },
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 @Composable
@@ -929,6 +999,56 @@ private fun ReferenceScalarEditor(
                     }
                 }
             }
+            display.key?.let { key ->
+                ReferenceActionsMenu(
+                    controller = controller,
+                    fieldType = fieldType,
+                    key = key,
+                    enabled = display.resolved,
+                    readOnly = state.targets[documentId]?.readOnly == true,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReferenceActionsMenu(
+    controller: WorkspaceController,
+    fieldType: String,
+    key: String,
+    enabled: Boolean,
+    readOnly: Boolean,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(
+            onClick = { open = true },
+            modifier = Modifier.size(24.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.MoreVert,
+                contentDescription = "引用对象操作",
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text("在新 Tab 打开", style = MaterialTheme.typography.bodySmall) },
+                enabled = enabled,
+                onClick = {
+                    open = false
+                    controller.openReferenceInTab(fieldType, key, readOnly)
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("在星图中定位", style = MaterialTheme.typography.bodySmall) },
+                enabled = enabled,
+                onClick = {
+                    open = false
+                    controller.focusReferenceInStarMap(fieldType, key, readOnly)
+                },
+            )
         }
     }
 }
@@ -1024,6 +1144,13 @@ private fun ReferenceListEditor(
                         Icon(Icons.Outlined.Delete, contentDescription = "删除", modifier = Modifier.size(15.dp))
                     }
                 }
+                ReferenceActionsMenu(
+                    controller = controller,
+                    fieldType = elementType,
+                    key = key,
+                    enabled = display.resolved,
+                    readOnly = state.targets[documentId]?.readOnly == true,
+                )
             }
         }
         if (keys.isEmpty()) {

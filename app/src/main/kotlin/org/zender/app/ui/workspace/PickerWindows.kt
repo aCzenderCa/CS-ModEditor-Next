@@ -45,7 +45,10 @@ import androidx.compose.ui.unit.dp
 import org.zender.app.workspace.PickerRequest
 import org.zender.app.workspace.PickerWindowKind
 import org.zender.app.workspace.WorkspaceController
+import org.zender.editor.graph.GraphNode
+import org.zender.editor.graph.GraphNodeOrigin
 import org.zender.editor.model.EntryOrigin
+import org.zender.editor.selection.FieldRef
 import org.zender.editor.objects.ReferenceKind
 import org.zender.editor.picker.PickerItem
 
@@ -61,6 +64,7 @@ fun PickerWindowContent(
     var selectedIdentity by remember(request) { mutableStateOf<String?>(null) }
     var multiSelected by remember(request) { mutableStateOf<Set<String>>(emptySet()) }
     var recentOnly by remember(request) { mutableStateOf(false) }
+    var showNewObject by remember(request) { mutableStateOf(false) }
 
     val items = remember(keyword, origin, recentOnly, state.project, state.pack, request) {
         if (recentOnly) {
@@ -213,6 +217,11 @@ fun PickerWindowContent(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (request.kind == PickerWindowKind.OBJECT) {
+                TextButton(onClick = { showNewObject = true }) {
+                    Text("新建对象并引用", style = MaterialTheme.typography.labelSmall)
+                }
+            }
             Spacer(modifier = Modifier.weight(1f))
             TextButton(onClick = { controller.closePicker() }) { Text("取消") }
             Button(
@@ -227,7 +236,37 @@ fun PickerWindowContent(
             ) { Text(if (request.isList && chosen.size > 1) "确认 ${chosen.size} 项" else "确认") }
         }
     }
+
+    if (showNewObject) {
+        NewObjectDialog(
+            controller = controller,
+            state = state,
+            presetType = request.fieldType.takeIf {
+                it.isNotBlank() && it !in GENERIC_REFERENCE_TYPES
+            },
+            onDismiss = { showNewObject = false },
+            onCreated = { created ->
+                controller.applyGraphReference(
+                    GraphNode(
+                        key = created.key,
+                        type = created.type,
+                        displayName = created.name,
+                        origin = GraphNodeOrigin.PROJECT_ADDED,
+                    ),
+                    FieldRef(request.documentId, request.fieldPath),
+                )
+                controller.closePicker()
+            },
+        )
+    }
 }
+
+private val GENERIC_REFERENCE_TYPES = setOf(
+    "ScriptableObject",
+    "UnityEngine.Object",
+    "Object",
+    "UniqueIDScriptable",
+)
 
 @Composable
 private fun ResourceGrid(
