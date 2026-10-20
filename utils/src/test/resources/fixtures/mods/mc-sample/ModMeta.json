@@ -11,5 +11,7 @@
   "Author": "Fixture",
   "Version": "1.0.0",
   "Icon": "",
-  "PluginGuid": []
+  "PluginGuid": [],
+  "CustomMeta": [1, 2],
+  "CustomPluginField": "keep"
 }

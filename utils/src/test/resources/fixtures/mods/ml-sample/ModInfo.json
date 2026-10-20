@@ -3,5 +3,8 @@
   "Author": "Fixture",
   "Version": "1.0.0",
   "ModLoaderVerison": "1.3.0",
-  "ModEditorVersion": "0.1.0"
+  "ModEditorVersion": "0.1.0",
+  "CustomMeta": {
+    "Keep": true
+  }
 }

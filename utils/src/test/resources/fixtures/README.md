@@ -30,3 +30,6 @@ fixtures/
 3. 真实数据包路径优先级：
    `-Dcsmode.pack.csti=...` → 环境变量 `CS_MODEDITOR_PACK_CSTI` → 默认 Steam 安装路径。
 4. 新增样例 Mod 时同步更新 `mods/manifest.json`，测试会校验清单项与目录是否一致。
+5. 样例 Mod 的元数据包含未知字段（`CustomMeta` 等），用于验证读写往返不丢字段；
+   `mc-sample/Data/DataObjectModify/CardTag/FixtureMc@tag_McFixture.json` 用于验证
+   `@` 代替 `:` 的文件名与工程内目标解析。
