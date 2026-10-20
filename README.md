@@ -5,6 +5,7 @@
 - [基础信息与规范](基础信息与规范.md)：项目基础信息、架构分层、编码/测试/文档/Git 规范。
 - [项目计划](项目计划.md)：数据包格式、ML/MC 加载逻辑、编辑器架构与依赖设计。
 - [进度检查点](进度检查点.md)：当前完成状态、验证记录、待办与风险。
+- [代码结构说明](代码结构说明.md)：模块与包职责、核心调用链、扩展点、测试位置与常见坑。
 
 This project uses [Gradle](https://gradle.org/).
 To build and run the application, use the *Gradle* tool window by clicking the Gradle icon in the right-hand toolbar,
