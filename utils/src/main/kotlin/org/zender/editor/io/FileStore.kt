@@ -31,9 +31,14 @@ interface FileStore {
 
     fun isDirectory(path: Path): Boolean
 
+    fun isRegularFile(path: Path): Boolean
+
     fun readText(path: Path): String
 
     fun readBytes(path: Path): ByteArray
+
+    /** 文件大小（字节）。路径不存在或不是普通文件时抛出 [FileStoreException]。 */
+    fun size(path: Path): Long
 
     /** 写入文本；父目录不存在时自动创建，写入过程是原子的。 */
     fun writeText(path: Path, text: String)
@@ -71,6 +76,8 @@ class AtomicFileStore(
 
     override fun isDirectory(path: Path): Boolean = Files.isDirectory(normalize(path))
 
+    override fun isRegularFile(path: Path): Boolean = Files.isRegularFile(normalize(path))
+
     override fun readText(path: Path): String {
         val bytes = readBytes(path)
         val text = bytes.toString(charset)
@@ -85,6 +92,15 @@ class AtomicFileStore(
             Files.readAllBytes(normalized)
         } catch (e: IOException) {
             throw FileStoreException("无法读取文件：$normalized", e)
+        }
+    }
+
+    override fun size(path: Path): Long {
+        val normalized = normalize(path)
+        return try {
+            Files.size(normalized)
+        } catch (e: IOException) {
+            throw FileStoreException("无法读取文件大小：$normalized", e)
         }
     }
 

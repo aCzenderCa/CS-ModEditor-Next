@@ -7,6 +7,7 @@ fixtures/
 ├── minipack/                 # 迷你数据包：与 csti / csff 相同的目录约定
 │   ├── PackInfo.json
 │   ├── TypeStruct/<Type>.json
+│   ├── TypeStruct/Enum/<Enum>.json
 │   ├── BaseJson/<Type>.json
 │   ├── Doc/<Type>.yml
 │   ├── Doc-En/<Type>.yml

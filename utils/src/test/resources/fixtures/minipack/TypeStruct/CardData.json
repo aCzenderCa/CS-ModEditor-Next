@@ -6,6 +6,7 @@
     "ObjectWeight": "Single",
     "CardTags": "CardTag",
     "SpawningBlockedBy": "CardData",
+    "CardInteractions": "CardOnCardAction",
     "UniqueID": "String"
   }
 }
