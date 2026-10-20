@@ -49,6 +49,12 @@ object TestFixtures {
     /** 迷你数据包根目录。 */
     fun miniPack(): Path = fixture("minipack")
 
+    /**
+     * 类型覆盖夹具：包含基础类型、枚举、嵌套对象、标量引用与引用列表，
+     * 供 Schema/引用校验的分支测试使用；不参与常规数据包测试。
+     */
+    fun probePack(): Path = fixture("probepack")
+
     /** 样例 Mod 清单。 */
     fun sampleMods(): List<SampleMod> {
         val manifestPath = fixture("mods/manifest.json")

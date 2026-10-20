@@ -15,6 +15,13 @@ fixtures/
 │   ├── GUID/...
 │   ├── Name/...
 │   └── SimpCn.csv
+├── probepack/                # 校验分支夹具：基础类型/枚举/对象/标量引用/引用列表
+│   ├── TypeStruct/Probe.json
+│   ├── BaseJson/Probe.json
+│   ├── TypeStruct/LocalizedString.json
+│   ├── TypeStruct/Enum/CardTypes.json
+│   ├── GUID/CardData.json
+│   └── Name/CardTag.json
 └── mods/
     ├── manifest.json         # 样例 Mod 清单（framework / game / path）
     ├── ml-sample/            # ML 目录型 Mod

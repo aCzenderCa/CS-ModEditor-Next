@@ -1,0 +1,16 @@
+{
+  "Fields": {
+    "Flag": "Boolean",
+    "Count": "Int32",
+    "Ratio": "Single",
+    "Text": "String",
+    "Mode": "CardTypes",
+    "Child": "LocalizedString",
+    "Target": "CardData",
+    "Tags": "CardTag",
+    "Numbers": "Int32",
+    "Modes": "CardTypes",
+    "Children": "LocalizedString",
+    "Mystery": "SomeUnknownType"
+  }
+}

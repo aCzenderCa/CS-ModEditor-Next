@@ -1,0 +1,18 @@
+{
+  "Flag": false,
+  "Count": 0,
+  "Ratio": 0.0,
+  "Text": "",
+  "Mode": 0,
+  "Child": {
+    "ParentObjectID": "",
+    "LocalizationKey": "",
+    "DefaultText": ""
+  },
+  "Target": {},
+  "Tags": [],
+  "Numbers": [],
+  "Modes": [],
+  "Children": [],
+  "Mystery": null
+}
