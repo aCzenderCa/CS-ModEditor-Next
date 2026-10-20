@@ -66,6 +66,7 @@ import org.zender.editor.document.JsonNode
 import org.zender.editor.document.JsonPath
 import org.zender.editor.document.JsonPathSegment
 import org.zender.editor.document.jsonBoolean
+import org.zender.editor.document.jsonString
 import org.zender.editor.document.readPath
 import org.zender.editor.edit.ValueCodec
 import org.zender.editor.edit.WarpFields
@@ -76,9 +77,10 @@ import org.zender.editor.field.FieldProjectionOptions
 import org.zender.editor.schema.DefaultValueResolver
 import org.zender.editor.schema.FieldKind
 import org.zender.editor.selection.FieldRef
-import org.zender.editor.settings.FavoriteField
 
 private data class VisibleField(val row: FieldRow, val depth: Int)
+
+private const val LOCALIZED_STRING_TYPE = "LocalizedString"
 
 @Composable
 fun FieldEditorView(
@@ -128,16 +130,26 @@ fun FieldEditorView(
     }
 
     val expanded = remember(documentId) { mutableStateMapOf<String, Boolean>() }
+    // 收藏区使用独立展开状态，避免继承主树里已经展开的节点，收藏后默认保持收起。
+    val favoriteExpanded = remember(documentId) { mutableStateMapOf<String, Boolean>() }
     val favoriteRows = remember(projection.rows) {
         projection.rows.flatMap { it.walk().toList() }.filter { it.isFavorite }
+    }
+    val favoriteVisible = remember(favoriteRows, favoriteExpanded.toMap()) {
+        favoriteVisibleRows(favoriteRows, favoriteExpanded)
     }
     val filtered = remember(projection.rows, options.search) {
         filterRows(projection.rows, options.search)
     }
-    val rows: List<VisibleField> = if (options.onlyFavorites) {
-        favoriteRows.map { VisibleField(it, 0) }
+    val treeRows = if (!options.onlyFavorites && favoriteRows.isNotEmpty()) {
+        removeFavoriteRows(filtered)
     } else {
-        flattenFields(filtered, expanded, forceExpand = options.search.isNotBlank())
+        filtered
+    }
+    val rows: List<VisibleField> = if (options.onlyFavorites) {
+        favoriteVisible
+    } else {
+        flattenFields(treeRows, expanded, forceExpand = options.search.isNotBlank())
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -154,12 +166,16 @@ fun FieldEditorView(
         LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp)) {
             if (!options.onlyFavorites && favoriteRows.isNotEmpty()) {
                 item(key = "favorites-title") { SectionTitle("收藏字段") }
-                items(favoriteRows, key = { "fav:" + it.path.format() }) { row ->
-                    FavoriteFieldRow(
+                items(favoriteVisible, key = { "fav:" + it.row.path.format() + "@" + it.depth }) { entry ->
+                    FieldRowItem(
                         controller = controller,
                         state = state,
                         documentId = documentId,
-                        row = row,
+                        target = target,
+                        rootType = schemaType,
+                        entry = entry,
+                        expanded = favoriteExpanded,
+                        displayPath = entry.depth == 0,
                     )
                 }
                 item(key = "favorites-separator") {
@@ -207,7 +223,7 @@ private fun FieldToolbar(
                     search = it
                     controller.setFieldOptions(options.copy(search = it))
                 },
-                modifier = Modifier.weight(1f).height(42.dp),
+                modifier = Modifier.weight(1f),
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodySmall,
                 leadingIcon = {
@@ -271,59 +287,6 @@ private fun FieldToolbar(
     }
 }
 
-@Composable
-private fun FavoriteFieldRow(
-    controller: WorkspaceController,
-    state: WorkspaceUiState,
-    documentId: DocumentId,
-    row: FieldRow,
-) {
-    val favorites = state.session.favorites
-    val type = state.targets[documentId]?.schemaType.orEmpty()
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { controller.selectField(documentId, row.path) }
-            .padding(vertical = 3.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Icon(
-            imageVector = Icons.Filled.Star,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(14.dp),
-        )
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = row.path.format(),
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = ValueCodec.display(row.value),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        if (type.isNotBlank() && FavoriteField(type, row.path.format()) in favorites) {
-            IconButton(
-                onClick = { controller.toggleFavorite(type, row.path.format()) },
-                modifier = Modifier.size(24.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.StarBorder,
-                    contentDescription = "取消收藏",
-                    modifier = Modifier.size(15.dp),
-                )
-            }
-        }
-    }
-}
 
 @Composable
 private fun FieldRowItem(
@@ -334,13 +297,16 @@ private fun FieldRowItem(
     rootType: String,
     entry: VisibleField,
     expanded: androidx.compose.runtime.snapshots.SnapshotStateMap<String, Boolean>,
+    displayPath: Boolean = false,
 ) {
     val row = entry.row
     val info = remember(rootType, row.path, state.pack) {
         controller.fieldInfo(documentId, row.path)
     }
     val document = state.session.documents[documentId]?.document
-    val hasChildren = row.children.isNotEmpty()
+    val localizedString = info?.kind == FieldKind.OBJECT &&
+        (info.typeName == LOCALIZED_STRING_TYPE || info.schemaField.typeName == LOCALIZED_STRING_TYPE)
+    val hasChildren = row.children.isNotEmpty() && !localizedString
     val isExpanded = expanded[row.path.format()] ?: false
     val editable = !target.readOnly && !row.isReadOnly
     val selected = state.session.selection.currentField == FieldRef(documentId, row.path)
@@ -412,6 +378,16 @@ private fun FieldRowItem(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    if (displayPath) {
+                        Text(
+                            text = row.path.format(),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
 
@@ -437,6 +413,14 @@ private fun FieldRowItem(
                         documentId = documentId,
                         row = row,
                         info = info,
+                        editable = editable,
+                    )
+
+                    localizedString -> LocalizedStringEditor(
+                        controller = controller,
+                        state = state,
+                        documentId = documentId,
+                        row = row,
                         editable = editable,
                     )
 
@@ -493,7 +477,7 @@ private fun FieldRowItem(
                         )
                     }
                     val defaultValue = row.defaultValue
-                    if (editable && defaultValue != null && !row.isDefault) {
+                    if (editable && !localizedString && defaultValue != null && !row.isDefault) {
                         TextButton(
                             onClick = {
                                 controller.resetField(documentId, row.path, defaultValue)
@@ -687,6 +671,202 @@ private fun EnumEditor(
 }
 
 @Composable
+private fun LocalizedStringEditor(
+    controller: WorkspaceController,
+    state: WorkspaceUiState,
+    documentId: DocumentId,
+    row: FieldRow,
+    editable: Boolean,
+) {
+    val document = state.session.documents[documentId]?.document ?: return
+    val node = document.root.readPath(row.path) as? JsonNode.ObjectNode ?: return
+    val parentId = (node.get("ParentObjectID") as? JsonNode.StringNode)?.value.orEmpty()
+    val key = (node.get("LocalizationKey") as? JsonNode.StringNode)?.value.orEmpty()
+    val defaultText = (node.get("DefaultText") as? JsonNode.StringNode)?.value.orEmpty()
+
+    val entry = remember(state.project?.workingTree?.localization, state.pack, key) {
+        controller.localizedEntry(key)
+    }
+    val english = entry?.english.orEmpty()
+    val chinese = entry?.chinese.orEmpty()
+    var expanded by remember(documentId, row.path.format()) { mutableStateOf(false) }
+    var englishText by remember(key, english, defaultText) {
+        mutableStateOf(english.ifBlank { defaultText })
+    }
+    var chineseText by remember(key, chinese) { mutableStateOf(chinese) }
+
+    fun commitLocalized() {
+        if (!editable || key.isBlank()) return
+        if (englishText == english && chineseText == chinese) return
+        controller.updateLocalizedText(key, englishText, chineseText)
+    }
+
+    fun commitChild(name: String, value: String) {
+        if (!editable) return
+        val path = row.path.child(name)
+        val info = controller.fieldInfo(documentId, path)
+        if (info != null) {
+            controller.setFieldText(documentId, path, value, info)
+        } else {
+            controller.setFieldNode(documentId, path, jsonString(value))
+        }
+    }
+
+    val languages = remember(state.settings.localizationInputLanguages) {
+        state.settings.localizationInputLanguages
+    }
+    val showChinese = languages.any {
+        it.equals("SimpCn", true) || it.equals("Chinese", true) || it == "中文"
+    }
+    val showEnglish = languages.any {
+        it.equals("En", true) || it.equals("English", true)
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        if (!expanded) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (showChinese) {
+                    LocalizedTextInput(
+                        label = "中文",
+                        value = chineseText,
+                        onValueChange = { chineseText = it },
+                        onCommit = ::commitLocalized,
+                        enabled = editable && key.isNotBlank(),
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (showEnglish) {
+                    LocalizedTextInput(
+                        label = "English",
+                        value = englishText,
+                        onValueChange = { englishText = it },
+                        onCommit = ::commitLocalized,
+                        enabled = editable && key.isNotBlank(),
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            if (key.isBlank()) {
+                Text(
+                    text = "LocalizationKey 为空：展开后填写 Key 才能编辑多语言文本",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            InlineStringField(
+                label = "ParentObjectID (PID)",
+                value = parentId,
+                enabled = editable,
+                onCommit = { commitChild("ParentObjectID", it) },
+            )
+            InlineStringField(
+                label = "LocalizationKey",
+                value = key,
+                enabled = editable,
+                onCommit = { commitChild("LocalizationKey", it) },
+            )
+            InlineStringField(
+                label = "DefaultText（回退文本）",
+                value = defaultText,
+                enabled = editable,
+                onCommit = { commitChild("DefaultText", it) },
+            )
+            if (showChinese) {
+                LocalizedTextInput(
+                    label = "中文",
+                    value = chineseText,
+                    onValueChange = { chineseText = it },
+                    onCommit = ::commitLocalized,
+                    enabled = editable && key.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (showEnglish) {
+                LocalizedTextInput(
+                    label = "English",
+                    value = englishText,
+                    onValueChange = { englishText = it },
+                    onCommit = ::commitLocalized,
+                    enabled = editable && key.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (!showChinese && !showEnglish) {
+                Text(
+                    text = "未选择本地化输入语言，请在设置中启用中文或 English。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        TextButton(onClick = { expanded = !expanded }) {
+            Text(
+                text = if (expanded) "收起语言/Key/PID" else "展开语言/Key/PID",
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun LocalizedTextInput(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    onCommit: () -> Unit,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    var wasFocused by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier.onFocusChanged { focusState ->
+            if (wasFocused && !focusState.isFocused) onCommit()
+            wasFocused = focusState.isFocused
+        },
+        label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+        enabled = enabled,
+        singleLine = false,
+        maxLines = 4,
+        textStyle = MaterialTheme.typography.bodySmall,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { onCommit() }),
+    )
+}
+
+@Composable
+private fun InlineStringField(
+    label: String,
+    value: String,
+    enabled: Boolean,
+    onCommit: (String) -> Unit,
+) {
+    var text by remember(label, value) { mutableStateOf(value) }
+    var wasFocused by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { text = it },
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focusState ->
+                if (wasFocused && !focusState.isFocused) onCommit(text)
+                wasFocused = focusState.isFocused
+            },
+        label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+        enabled = enabled,
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodySmall,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { onCommit(text) }),
+    )
+}
+
+@Composable
 private fun ReferenceScalarEditor(
     controller: WorkspaceController,
     state: WorkspaceUiState,
@@ -725,11 +905,13 @@ private fun ReferenceScalarEditor(
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(
-                text = "WarpType=${display.warpType?.let { "${it.value} ${it.name}" } ?: "缺失"}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (state.settings.showWarpType) {
+                Text(
+                    text = "WarpType=${display.warpType?.let { "${it.value} ${it.name}" } ?: "缺失"}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (editable) {
                 TextButton(onClick = {
                     controller.openPicker(documentId, row.path, fieldType, isList = false)
@@ -776,11 +958,13 @@ private fun ReferenceListEditor(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "WarpType=${warpType?.let { "${it.value} ${it.name}" } ?: "缺失"}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (state.settings.showWarpType) {
+                Text(
+                    text = "WarpType=${warpType?.let { "${it.value} ${it.name}" } ?: "缺失"}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (editable) {
                 TextButton(onClick = {
                     controller.openPicker(documentId, row.path, elementType, isList = true)
@@ -933,8 +1117,32 @@ private fun flattenFields(
     rows.forEach { row ->
         result += VisibleField(row, depth)
         val isExpanded = expanded[row.path.format()] ?: forceExpand
-        if (isExpanded && row.children.isNotEmpty()) {
+        if (isExpanded && row.children.isNotEmpty() && row.typeName != LOCALIZED_STRING_TYPE) {
             result += flattenFields(row.children, expanded, depth + 1, forceExpand)
+        }
+    }
+    return result
+}
+
+/** 收藏项整体移到顶部，主树中不再保留它或它的子字段。 */
+private fun removeFavoriteRows(rows: List<FieldRow>): List<FieldRow> =
+    rows.mapNotNull { row ->
+        if (row.isFavorite) {
+            null
+        } else {
+            row.copy(children = removeFavoriteRows(row.children))
+        }
+    }
+
+private fun favoriteVisibleRows(
+    favorites: List<FieldRow>,
+    expanded: Map<String, Boolean>,
+): List<VisibleField> {
+    val result = mutableListOf<VisibleField>()
+    favorites.forEach { row ->
+        result += VisibleField(row, 0)
+        if (expanded[row.path.format()] == true && row.children.isNotEmpty()) {
+            result += flattenFields(row.children, expanded, depth = 1)
         }
     }
     return result

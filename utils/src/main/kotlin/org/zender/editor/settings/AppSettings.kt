@@ -83,6 +83,14 @@ data class AppSettings(
     val language: String? = null,
     /** 主题模式：SYSTEM / LIGHT / DARK。 */
     val themeMode: String = "SYSTEM",
+    /** 是否在字段视图/检查器显示 WarpType 数值，默认关闭。 */
+    val showWarpType: Boolean = false,
+    /** 本地化字段展开时默认显示的语言输入框，取值如 `SimpCn` / `En`。 */
+    val localizationInputLanguages: List<String> = DEFAULT_LOCALIZATION_LANGUAGES,
+    /** 工程目录 → 关联数据包目录，避免每次打开工程重复选择。 */
+    val projectPackDirectories: Map<String, String> = emptyMap(),
+    /** 已打开工程时再次打开项目的默认行为：ASK / NEW_WINDOW / CURRENT_WINDOW。 */
+    val openProjectBehavior: String = "ASK",
     /** 多窗口布局：启动后打开工程时恢复内容键与几何。 */
     val detachedWindows: List<DetachedWindowSettings> = emptyList(),
 ) {
@@ -125,12 +133,32 @@ data class AppSettings(
     fun withoutDetachedWindow(documentId: String): AppSettings =
         copy(detachedWindows = detachedWindows.filterNot { it.documentId == documentId })
 
+    fun withProjectPackDirectory(project: Path, pack: Path): AppSettings {
+        val key = project.toAbsolutePath().normalize().toString()
+        val value = pack.toAbsolutePath().normalize().toString()
+        return copy(projectPackDirectories = projectPackDirectories + (key to value))
+    }
+
+    fun withoutProjectPackDirectory(project: String): AppSettings =
+        copy(projectPackDirectories = projectPackDirectories - project)
+
+    fun withLocalizationInputLanguage(language: String, enabled: Boolean): AppSettings {
+        require(language.isNotBlank()) { "语言标识不能为空" }
+        val updated = if (enabled) {
+            (localizationInputLanguages + language).distinct()
+        } else {
+            localizationInputLanguages.filterNot { it == language }
+        }
+        return copy(localizationInputLanguages = updated)
+    }
+
     companion object {
         const val CURRENT_SCHEMA_VERSION: Int = 1
         const val MAX_RECENT_ENTRIES: Int = 10
         const val MAX_RECENT_PACKS: Int = 10
         const val MAX_FAVORITE_FIELDS: Int = 500
         const val MAX_DETACHED_WINDOWS: Int = 8
+        val DEFAULT_LOCALIZATION_LANGUAGES: List<String> = listOf("SimpCn", "En")
 
         private fun prependUnique(value: String, values: List<String>, limit: Int): List<String> =
             (listOf(value) + values.filterNot { it == value }).take(limit.coerceAtLeast(0))
@@ -156,6 +184,7 @@ class SettingsStore(
         ignoreUnknownKeys = true
     }
 
+    @Synchronized
     fun load(): AppSettings {
         if (!fileStore.exists(path)) return AppSettings()
         return try {
@@ -173,6 +202,7 @@ class SettingsStore(
         }
     }
 
+    @Synchronized
     fun save(settings: AppSettings) {
         fileStore.writeText(path, json.encodeToString(settings))
     }
@@ -180,6 +210,7 @@ class SettingsStore(
     /**
      * 读取 → 变换 → 写回，返回写入后的设置。
      */
+    @Synchronized
     fun update(transform: (AppSettings) -> AppSettings): AppSettings {
         val updated = transform(load())
         save(updated)

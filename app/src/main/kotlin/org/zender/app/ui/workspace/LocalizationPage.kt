@@ -86,7 +86,7 @@ fun LocalizationPage(
             OutlinedTextField(
                 value = search,
                 onValueChange = { search = it },
-                modifier = Modifier.width(280.dp).height(42.dp),
+                modifier = Modifier.width(280.dp),
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodySmall,
                 leadingIcon = {
@@ -155,7 +155,7 @@ fun LocalizationPage(
             OutlinedTextField(
                 value = newKey,
                 onValueChange = { newKey = it },
-                modifier = Modifier.weight(0.34f).height(42.dp),
+                modifier = Modifier.weight(0.34f),
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodySmall,
                 placeholder = { Text("新增 Key", style = MaterialTheme.typography.bodySmall) },
@@ -163,7 +163,7 @@ fun LocalizationPage(
             OutlinedTextField(
                 value = newEnglish,
                 onValueChange = { newEnglish = it },
-                modifier = Modifier.weight(0.28f).height(42.dp),
+                modifier = Modifier.weight(0.28f),
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodySmall,
                 placeholder = { Text("English", style = MaterialTheme.typography.bodySmall) },
@@ -171,7 +171,7 @@ fun LocalizationPage(
             OutlinedTextField(
                 value = newChinese,
                 onValueChange = { newChinese = it },
-                modifier = Modifier.weight(0.28f).height(42.dp),
+                modifier = Modifier.weight(0.28f),
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodySmall,
                 placeholder = { Text("中文", style = MaterialTheme.typography.bodySmall) },
@@ -303,7 +303,6 @@ private fun LocalizationCell(
         value = value,
         onValueChange = onValueChange,
         modifier = modifier
-            .height(40.dp)
             .onFocusChanged { focusState ->
                 if (wasFocused && !focusState.isFocused) onCommit()
                 wasFocused = focusState.isFocused

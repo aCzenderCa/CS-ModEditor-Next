@@ -19,6 +19,7 @@ import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -42,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import org.zender.app.platform.FilePicker
 import org.zender.app.ui.theme.ThemeMode
+import org.zender.app.workspace.OpenProjectBehavior
 import org.zender.app.workspace.WorkspaceController
 import org.zender.app.workspace.WorkspaceUiState
 import org.zender.editor.settings.FavoriteField
@@ -56,8 +58,10 @@ fun SettingsPage(
     val scope = rememberCoroutineScope()
     var languageMenu by remember { mutableStateOf(false) }
     var themeMenu by remember { mutableStateOf(false) }
+    var openBehaviorMenu by remember { mutableStateOf(false) }
     val settings = state.settings
     val themeMode = ThemeMode.fromStorage(settings.themeMode)
+    val openBehavior = OpenProjectBehavior.fromStorage(settings.openProjectBehavior)
 
     Column(
         modifier = Modifier
@@ -113,6 +117,47 @@ fun SettingsPage(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+
+        SectionTitle("编辑器")
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(
+                checked = settings.showWarpType,
+                onCheckedChange = { controller.setShowWarpType(it) },
+            )
+            Column {
+                Text("显示 WarpType", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    text = "默认关闭。开启后在引用字段与检查器中显示 3/6 等运行时常量。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Text(
+            text = "LocalizedString 输入语言（默认中文 + English）",
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            listOf("SimpCn" to "中文", "En" to "English").forEach { (code, label) ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = code in settings.localizationInputLanguages,
+                        onCheckedChange = {
+                            controller.setLocalizationInputLanguage(code, it)
+                        },
+                    )
+                    Text(label, style = MaterialTheme.typography.bodySmall)
+                }
+            }
         }
 
         SectionTitle("数据包")
@@ -187,7 +232,45 @@ fun SettingsPage(
         }
 
         SectionTitle("工程")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("打开工程时的窗口", style = MaterialTheme.typography.bodySmall)
+            Spacer(modifier = Modifier.width(10.dp))
+            androidx.compose.foundation.layout.Box {
+                TextButton(onClick = { openBehaviorMenu = true }) {
+                    Text(
+                        when (openBehavior) {
+                            OpenProjectBehavior.ASK -> "每次询问"
+                            OpenProjectBehavior.NEW_WINDOW -> "新窗口"
+                            OpenProjectBehavior.CURRENT_WINDOW -> "当前窗口"
+                        },
+                    )
+                }
+                DropdownMenu(
+                    expanded = openBehaviorMenu,
+                    onDismissRequest = { openBehaviorMenu = false },
+                ) {
+                    listOf(
+                        OpenProjectBehavior.ASK to "每次询问",
+                        OpenProjectBehavior.NEW_WINDOW to "新窗口",
+                        OpenProjectBehavior.CURRENT_WINDOW to "当前窗口",
+                    ).forEach { (behavior, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = {
+                                openBehaviorMenu = false
+                                controller.setOpenProjectBehavior(behavior)
+                            },
+                        )
+                    }
+                }
+            }
+        }
         KeyValue("当前工程", state.projectRoot?.toString() ?: "尚未打开", mono = true)
+        KeyValue(
+            "关联数据包",
+            state.projectRoot?.let { settings.projectPackDirectories[it.toString()] } ?: "尚未记录",
+            mono = true,
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = {
                 scope.launch {

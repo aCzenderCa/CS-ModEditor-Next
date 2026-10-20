@@ -42,6 +42,8 @@ import org.zender.editor.objects.ReferenceResolution
 import org.zender.editor.pack.DataPack
 import org.zender.editor.pack.DataPackLoader
 import org.zender.editor.pack.PackHistoryStore
+import org.zender.editor.pack.PackLoadOptions
+import org.zender.editor.schema.SchemaLoadOptions
 import org.zender.editor.picker.PickerItem
 import org.zender.editor.picker.PickerQuery
 import org.zender.editor.project.DataObjectModifyId
@@ -139,7 +141,15 @@ class WorkspaceController(
         statusIsError = false
         refresh()
 
-        val result = withContext(Dispatchers.IO) { packLoader.load(root) }
+        val result = withContext(Dispatchers.IO) {
+            packLoader.load(
+                root,
+                PackLoadOptions(
+                    // 允许在字段视图修改 LocalizedString 的 ParentObjectID / LocalizationKey。
+                    schemaOptions = SchemaLoadOptions(readOnlyFields = emptyMap()),
+                ),
+            )
+        }
         busy = false
         if (!result.isSuccess) {
             diagnostics = result.diagnostics
@@ -175,6 +185,7 @@ class WorkspaceController(
         } else {
             status = "数据包已加载：${loaded.info.name} ${loaded.info.version}".trim()
         }
+        associateProjectPack()
         refresh()
     }
 
@@ -184,7 +195,35 @@ class WorkspaceController(
         statusIsError = false
         refresh()
 
-        val result = withContext(Dispatchers.IO) { projectLoader.read(root, pack) }
+        val normalizedRoot = fileStore.normalize(root)
+        var effectivePack = pack
+        val associated = settings.projectPackDirectories[normalizedRoot.toString()]
+        if (associated != null) {
+            val linkedRoot = Path.of(associated)
+            val currentPackRoot = packRoot
+            val shouldLoad = currentPackRoot == null ||
+                fileStore.normalize(currentPackRoot) != fileStore.normalize(linkedRoot)
+            if (shouldLoad && fileStore.isDirectory(linkedRoot)) {
+                val linkedResult = withContext(Dispatchers.IO) {
+                    packLoader.load(
+                        linkedRoot,
+                        PackLoadOptions(
+                            schemaOptions = SchemaLoadOptions(readOnlyFields = emptyMap()),
+                        ),
+                    )
+                }
+                if (linkedResult.isSuccess) {
+                    effectivePack = linkedResult.packOrThrow()
+                    pack = effectivePack
+                    packRoot = effectivePack.root
+                    diagnostics = linkedResult.diagnostics
+                } else {
+                    diagnostics = linkedResult.diagnostics
+                }
+            }
+        }
+
+        val result = withContext(Dispatchers.IO) { projectLoader.read(normalizedRoot, effectivePack) }
         busy = false
         if (!result.isSuccess) {
             diagnostics = result.diagnostics
@@ -196,6 +235,7 @@ class WorkspaceController(
         applyProject(result.projectOrThrow())
         diagnostics = result.diagnostics
         validation = emptyList()
+        associateProjectPack()
         runCatching {
             settings = settingsStore.update { it.withRecentProject(root) }
         }.onFailure { logger.warn("记录最近工程失败", it) }
@@ -204,6 +244,17 @@ class WorkspaceController(
         refresh()
         restoreDetachedWindows()
         validateProject()
+    }
+
+    /** 记住「工程目录 → 数据包目录」，下次打开工程时自动加载。 */
+    private fun associateProjectPack() {
+        val currentProjectRoot = projectRoot ?: return
+        val currentPackRoot = packRoot ?: return
+        runCatching {
+            settings = settingsStore.update {
+                it.withProjectPackDirectory(currentProjectRoot, currentPackRoot)
+            }
+        }.onFailure { logger.warn("保存工程数据包关联失败", it) }
     }
 
     private fun applyProject(loaded: ModProject) {
@@ -780,6 +831,38 @@ class WorkspaceController(
         return ReferenceDisplay(key, null, described.first, described.second, described.third)
     }
 
+    /**
+     * 选择器详情预览。必须先把候选编码成实际引用键：
+     * UniqueID 对象用 GUID，而不是对象名，否则会误报“目标不存在”。
+     */
+    fun previewPickerItem(item: PickerItem, fieldType: String): ReferenceDisplay {
+        val current = project ?: return ReferenceDisplay(
+            item.name,
+            null,
+            "尚未打开工程",
+            resolved = false,
+        )
+        val key = try {
+            if (item.isResource) {
+                current.keyCodec.encodeResourceKey(item.name)
+            } else {
+                current.keyCodec.encodeReference(
+                    ObjectKey.of(item.type, item.name, item.uniqueId),
+                    item.referenceKind,
+                )
+            }
+        } catch (e: Exception) {
+            return ReferenceDisplay(
+                item.name,
+                null,
+                "无法生成引用键：${e.message}",
+                resolved = false,
+                warning = true,
+            )
+        }
+        return describeReferenceKey(fieldType, key)
+    }
+
     private fun describeReference(
         fieldType: String,
         key: String,
@@ -1065,6 +1148,25 @@ class WorkspaceController(
     fun localizationEntries(): List<LocalizationEntry> =
         project?.workingTree?.localization?.table?.entries.orEmpty()
 
+    /**
+     * 查询某个 Key 的当前中英文文本：工程本地化优先，空列回退到数据包。
+     */
+    fun localizedEntry(key: String?): LocalizationEntry? {
+        if (key.isNullOrBlank()) return null
+        val projectEntry = project?.workingTree?.localization?.entry(key)
+        val packEntry = pack?.localization?.entry(key)
+        if (projectEntry == null) return packEntry
+        return LocalizationEntry(
+            key = key,
+            english = projectEntry.english.ifBlank { packEntry?.english.orEmpty() },
+            chinese = projectEntry.chinese.ifBlank { packEntry?.chinese.orEmpty() },
+        )
+    }
+
+    /** 编辑某个本地化 Key 的中英文；Key 不存在时新增。 */
+    fun updateLocalizedText(key: String, english: String, chinese: String): Boolean =
+        updateLocalizationEntry(key, english, chinese)
+
     fun updateLocalizationEntry(key: String, english: String, chinese: String): Boolean {
         val current = project ?: return fail("尚未打开工程")
         if (key.isBlank()) return fail("本地化 Key 不能为空")
@@ -1222,6 +1324,46 @@ class WorkspaceController(
             }
             statusIsError = false
         }.onFailure { fail("保存主题失败：${it.message}") }
+        refresh()
+    }
+
+    fun setOpenProjectBehavior(behavior: OpenProjectBehavior) {
+        runCatching {
+            settings = settingsStore.update { it.copy(openProjectBehavior = behavior.name) }
+            status = when (behavior) {
+                OpenProjectBehavior.ASK -> "打开工程时将询问窗口"
+                OpenProjectBehavior.NEW_WINDOW -> "打开工程时默认使用新窗口"
+                OpenProjectBehavior.CURRENT_WINDOW -> "打开工程时默认使用当前窗口"
+            }
+            statusIsError = false
+        }.onFailure { fail("保存打开工程设置失败：${it.message}") }
+        refresh()
+    }
+
+    /** 重新读取共享设置（其他窗口可能刚刚修改过）。 */
+    fun reloadSettings() {
+        settings = runCatching { settingsStore.load() }.getOrElse {
+            logger.warn("重新读取设置失败", it)
+            settings
+        }
+        refresh()
+    }
+
+    fun setShowWarpType(show: Boolean) {
+        runCatching {
+            settings = settingsStore.update { it.copy(showWarpType = show) }
+            status = if (show) "字段视图将显示 WarpType" else "字段视图已隐藏 WarpType"
+            statusIsError = false
+        }.onFailure { fail("保存 WarpType 设置失败：${it.message}") }
+        refresh()
+    }
+
+    fun setLocalizationInputLanguage(language: String, enabled: Boolean) {
+        runCatching {
+            settings = settingsStore.update { it.withLocalizationInputLanguage(language, enabled) }
+            status = "本地化输入语言已更新"
+            statusIsError = false
+        }.onFailure { fail("保存本地化语言设置失败：${it.message}") }
         refresh()
     }
 

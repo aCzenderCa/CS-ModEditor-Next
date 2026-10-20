@@ -149,6 +149,98 @@ class WorkspaceControllerTest {
     }
 
     @Test
+    fun `工程与数据包目录关联后再次打开工程自动加载数据包`() {
+        withFixture { fixture ->
+            val first = fixture.controller()
+            first.loadPack(fixture.packRoot)
+            first.loadProject(fixture.projectRoot)
+            assertNotNull(first.state.value.pack)
+
+            val second = fixture.controller()
+            second.loadProject(fixture.projectRoot)
+            assertNotNull(second.state.value.pack)
+            assertEquals(
+                fixture.packRoot.toAbsolutePath().normalize(),
+                second.state.value.packRoot,
+            )
+            assertNotNull(second.state.value.project)
+        }
+    }
+
+    @Test
+    fun `选择器预览 UniqueID 对象使用 GUID 而不是对象名`() {
+        withFixture { fixture ->
+            val controller = openedController(fixture)
+            val item = PickerItem(
+                type = "CardData",
+                name = "BaseCard",
+                uniqueId = WorkspaceTestFixture.PACK_CARD_GUID,
+                referenceKind = ReferenceKind.UNIQUE_ID,
+                origin = EntryOrigin.BASE_PACK,
+            )
+            val display = controller.previewPickerItem(item, "CardData")
+            assertTrue(display.resolved, display.status)
+            assertEquals(WorkspaceTestFixture.PACK_CARD_GUID, display.key)
+        }
+    }
+
+    @Test
+    fun `LocalizedString 的 Key 与 PID 可编辑并维护本地化文本`() {
+        withFixture { fixture ->
+            val controller = openedController(fixture)
+            val id = WorkspaceController.objectDocumentId("CardData", "ProjectCard")
+            val keyPath = JsonPath.parse("CardName.LocalizationKey")
+            val keyInfo = assertNotNull(controller.fieldInfo(id, keyPath))
+            assertFalse(keyInfo.isReadOnly)
+
+            val oldKey = "TestMod_ProjectCard_CardName"
+            val entry = assertNotNull(controller.localizedEntry(oldKey))
+            assertEquals("Project Card", entry.english)
+            assertEquals("工程卡", entry.chinese)
+
+            assertTrue(controller.setFieldText(id, keyPath, "TestMod_ProjectCard_NewKey", keyInfo))
+            val document = controller.state.value.session.documents.getValue(id).document
+            val newKey = (document.root.readPath(keyPath) as JsonNode.StringNode).value
+            assertEquals("TestMod_ProjectCard_NewKey", newKey)
+
+            assertTrue(controller.updateLocalizedText(newKey, "New English", "新中文"))
+            val updated = assertNotNull(controller.localizedEntry(newKey))
+            assertEquals("New English", updated.english)
+            assertEquals("新中文", updated.chinese)
+            assertTrue(controller.state.value.session.projectDirty)
+
+            val pidInfo = assertNotNull(controller.fieldInfo(id, JsonPath.parse("CardName.ParentObjectID")))
+            assertFalse(pidInfo.isReadOnly)
+            val pid = WorkspaceTestFixture.PROJECT_CARD_GUID
+            assertTrue(controller.setFieldText(id, JsonPath.parse("CardName.ParentObjectID"), pid, pidInfo))
+        }
+    }
+
+    @Test
+    fun `打开工程窗口行为持久化`() {
+        withFixture { fixture ->
+            val controller = fixture.controller()
+            assertEquals("ASK", fixture.settingsStore().load().openProjectBehavior)
+            controller.setOpenProjectBehavior(OpenProjectBehavior.NEW_WINDOW)
+            assertEquals("NEW_WINDOW", controller.state.value.settings.openProjectBehavior)
+            assertEquals("NEW_WINDOW", fixture.settingsStore().load().openProjectBehavior)
+            controller.setOpenProjectBehavior(OpenProjectBehavior.CURRENT_WINDOW)
+            assertEquals("CURRENT_WINDOW", fixture.settingsStore().load().openProjectBehavior)
+        }
+    }
+
+    @Test
+    fun `WarpType 显示开关持久化且默认关闭`() {
+        withFixture { fixture ->
+            val controller = fixture.controller()
+            assertFalse(controller.state.value.settings.showWarpType)
+            controller.setShowWarpType(true)
+            assertTrue(controller.state.value.settings.showWarpType)
+            assertTrue(fixture.settingsStore().load().showWarpType)
+        }
+    }
+
+    @Test
     fun `主题模式持久化`() {
         withFixture { fixture ->
             val controller = fixture.controller()

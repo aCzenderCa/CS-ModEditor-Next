@@ -30,6 +30,19 @@ enum class PickerWindowKind {
     RESOURCE,
 }
 
+/** 已打开工程时再次打开项目的默认行为。 */
+enum class OpenProjectBehavior {
+    ASK,
+    NEW_WINDOW,
+    CURRENT_WINDOW,
+    ;
+
+    companion object {
+        fun fromStorage(value: String?): OpenProjectBehavior =
+            entries.firstOrNull { it.name == value } ?: ASK
+    }
+}
+
 /** 字段视图的显示过滤。 */
 data class FieldViewOptions(
     /** 显示等于模板默认值的字段；补丁文档默认关闭。 */

@@ -35,6 +35,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isTertiaryPressed
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.zender.app.workspace.DocumentTarget
@@ -78,6 +81,19 @@ fun FileTabBar(
                             if (active) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
                             else Color.Transparent,
                         )
+                        .pointerInput(id) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    if (event.type == PointerEventType.Press &&
+                                        event.buttons.isTertiaryPressed
+                                    ) {
+                                        onCloseRequest(id)
+                                        event.changes.forEach { it.consume() }
+                                    }
+                                }
+                            }
+                        }
                         .clickable { controller.activateDocument(id) }
                         .padding(start = 10.dp, end = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,

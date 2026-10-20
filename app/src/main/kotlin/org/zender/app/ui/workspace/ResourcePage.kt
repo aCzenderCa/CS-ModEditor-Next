@@ -122,7 +122,7 @@ fun ResourcePage(
             OutlinedTextField(
                 value = search,
                 onValueChange = { search = it },
-                modifier = Modifier.width(280.dp).height(42.dp),
+                modifier = Modifier.width(280.dp),
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodySmall,
                 leadingIcon = {

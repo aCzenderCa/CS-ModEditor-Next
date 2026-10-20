@@ -118,7 +118,9 @@ fun InspectorPane(
                 }
                 if (reference != null) {
                     KeyValue("引用键", reference.key ?: "（未设置）", mono = true)
-                    KeyValue("WarpType", reference.warpType?.let { "${it.value} ${it.name}" } ?: "缺失")
+                    if (state.settings.showWarpType) {
+                        KeyValue("WarpType", reference.warpType?.let { "${it.value} ${it.name}" } ?: "缺失")
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         StatusChip(
                             text = reference.status,

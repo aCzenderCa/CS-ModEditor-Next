@@ -97,7 +97,7 @@ fun PickerWindowContent(
             OutlinedTextField(
                 value = keyword,
                 onValueChange = { keyword = it },
-                modifier = Modifier.weight(1f).height(42.dp),
+                modifier = Modifier.weight(1f),
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodySmall,
                 leadingIcon = {
@@ -403,9 +403,15 @@ private fun PickerDetails(
         item.resourcePath?.let { KeyValue("相对路径", it, mono = true) }
         item.group?.let { KeyValue("分组", it) }
         val targetType = request.fieldType
-        if (targetType.isNotBlank() && !item.isResource) {
-            val display = controller.describeReferenceKey(targetType, item.name)
+        if (targetType.isNotBlank()) {
+            val display = controller.previewPickerItem(item, targetType)
             Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "实际引用键：${display.key ?: "—"}",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             StatusChip(
                 text = display.status,
                 warning = display.warning,
