@@ -53,6 +53,21 @@ data class RecentPack(
 }
 
 /**
+ * 已分离的编辑窗口。内容键是 `DocumentId`，窗口几何单位为 dp。
+ */
+@Serializable
+data class DetachedWindowSettings(
+    val documentId: String,
+    val x: Float? = null,
+    val y: Float? = null,
+    val width: Float = 1200f,
+    val height: Float = 800f,
+    val maximized: Boolean = false,
+    /** `FIELD` / `RAW` / `DIFF`，读取失败时回退 FIELD。 */
+    val viewMode: String = "FIELD",
+)
+
+/**
  * 应用级持久化设置。所有列表都有上限，避免长期使用后无限增长。
  */
 @Serializable
@@ -66,6 +81,10 @@ data class AppSettings(
     /** 最近打开的数据包目录，按最后打开时间从新到旧排列。 */
     val recentPackDirectories: List<RecentPack> = emptyList(),
     val language: String? = null,
+    /** 主题模式：SYSTEM / LIGHT / DARK。 */
+    val themeMode: String = "SYSTEM",
+    /** 多窗口布局：启动后打开工程时恢复内容键与几何。 */
+    val detachedWindows: List<DetachedWindowSettings> = emptyList(),
 ) {
     fun withRecentDirectory(directory: Path, limit: Int = MAX_RECENT_ENTRIES): AppSettings =
         copy(recentDirectories = prependUnique(directory.toString(), recentDirectories, limit))
@@ -100,11 +119,18 @@ data class AppSettings(
     fun withoutFavoriteField(type: String, fieldPath: String): AppSettings =
         copy(favoriteFields = favoriteFields.filterNot { it.type == type && it.fieldPath == fieldPath })
 
+    fun withDetachedWindows(windows: List<DetachedWindowSettings>): AppSettings =
+        copy(detachedWindows = windows.take(MAX_DETACHED_WINDOWS))
+
+    fun withoutDetachedWindow(documentId: String): AppSettings =
+        copy(detachedWindows = detachedWindows.filterNot { it.documentId == documentId })
+
     companion object {
         const val CURRENT_SCHEMA_VERSION: Int = 1
         const val MAX_RECENT_ENTRIES: Int = 10
         const val MAX_RECENT_PACKS: Int = 10
         const val MAX_FAVORITE_FIELDS: Int = 500
+        const val MAX_DETACHED_WINDOWS: Int = 8
 
         private fun prependUnique(value: String, values: List<String>, limit: Int): List<String> =
             (listOf(value) + values.filterNot { it == value }).take(limit.coerceAtLeast(0))

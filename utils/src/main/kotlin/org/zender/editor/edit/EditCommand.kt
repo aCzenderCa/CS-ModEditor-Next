@@ -30,6 +30,11 @@ interface EditCommand {
 class ReplaceDocumentCommand(
     override val label: String,
     private val replacement: JsonDocument,
+    /**
+     * 原始 JSON 视图连续输入时传入稳定合并键（例如 `"raw:$documentId"`），
+     * 避免每个字符都产生一条撤销历史。
+     */
+    override val mergeKey: String? = null,
 ) : EditCommand {
     override fun execute(document: JsonDocument): JsonDocument = replacement
 }
