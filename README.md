@@ -1,5 +1,41 @@
 # CS-ModEditor-Next
 
+## Claude Code MCP 自动接入
+
+编辑器启动时会自动完成两件事，用户**不需要写 `.mcp.json`，也不需要执行 `claude mcp add`**：
+
+1. 在 `127.0.0.1:47831` 启动内嵌 MCP HTTP 服务（只监听回环地址）；
+2. 通过 `claude mcp add -s user -t http cs-modeditor <endpoint>` 把端点注册到 Claude Code
+   （user scope，重启编辑器会刷新注册）。
+
+使用顺序：**先打开编辑器，再启动 Claude Code**。验证：
+
+```bash
+claude mcp get cs-modeditor
+```
+
+正常时应显示 `Scope: User config` 与 `Status: ✔ Connected`。
+
+说明与可调项：
+
+- MCP 修改会直接进入编辑器的 `EditorSession`：字段视图、撤销栈与脏状态都会同步更新；
+  `save_project` 才会写盘。
+- 需要本机安装 Claude Code CLI（`claude` 在 PATH 中；Windows 也会探测 `%APPDATA%\npm\claude.cmd`）。
+- Claude Code 若已在运行，请在会话中使用 `/mcp` 重新连接，或重启会话。
+- 端口可用环境变量 `CSMODE_MCP_PORT` 覆盖；注册会自动使用实际端点。
+- 关闭自动注册：设置 `CSMODE_MCP_AUTO_REGISTER=0`；手动注册命令：
+  `claude mcp add -s user -t http cs-modeditor http://127.0.0.1:47831/mcp`。
+- 当前 MCP 端点绑定**主窗口**的工作区；独立工程窗口不会自动切换。
+
+可用工具：
+
+| 类别 | 工具 |
+| --- | --- |
+| 加载/概览 | `open_pack`、`open_project`、`project_summary` |
+| 浏览/读取 | `list_object_types`、`list_objects`、`get_object`、`get_schema`、`list_localization`、`list_resources` |
+| 校验/保存 | `validate_project`、`save_project` |
+| 编辑 | `set_field`、`set_reference`、`clear_reference`、`remove_reference`、`create_object`、`set_localization`、`import_resource` |
+
 ## 文档
 
 - [基础信息与规范](基础信息与规范.md)：项目基础信息、架构分层、编码/测试/文档/Git 规范。

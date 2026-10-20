@@ -16,6 +16,10 @@ plugins {
 dependencies {
     // Project "app" depends on project "utils". (Project paths are separated with ":", so ":utils" refers to the top-level "utils" project.)
     implementation(project(":utils"))
+    // 编辑器内嵌 MCP 服务端：协议、工具目录与 HTTP 传输。
+    implementation(project(":mcp"))
+    // 将 MCP HTTP 线程的工具调用切回 Compose Desktop 使用的 Swing EDT。
+    implementation(libs.kotlinxCoroutinesSwing)
 
     // Compose for Desktop: runtime, UI toolkit, and native artifacts for the current OS.
     implementation(compose.desktop.currentOs)
@@ -53,6 +57,9 @@ compose.desktop {
             // 只生成 Windows 单文件安装器（内置运行时，无需用户预装 JRE）。
             // 需要 WiX Toolset 3.x；Compose Desktop 通过 jpackage 生成 exe。
             targetFormats(TargetFormat.Exe)
+            // 内嵌 MCP HTTP 服务使用 com.sun.net.httpserver；显式打入运行时，
+            // 避免 jdeps 漏判导致打包后的 exe 缺少该模块。
+            modules("jdk.httpserver")
             packageName = "CS-ModEditor-Next"
             packageVersion = "1.0.0"
             description = "Card Survival Mod Editor (Next)"

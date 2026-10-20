@@ -61,6 +61,7 @@ import org.zender.editor.project.ProjectObjectKind
 import org.zender.editor.project.ProjectReferenceResolver
 import org.zender.editor.project.ReferenceCheck
 import org.zender.editor.project.ResourceImporter
+import org.zender.editor.project.ResourceImportResult
 import org.zender.editor.project.ResourceId
 import org.zender.editor.project.SchemaValidator
 import org.zender.editor.project.ValidationIssue
@@ -299,6 +300,7 @@ class WorkspaceController(
         kind: ProjectObjectKind? = null,
         group: String? = null,
         sourceDocument: org.zender.editor.document.JsonDocument? = null,
+        uniqueId: String? = null,
     ): ProjectObject? {
         val current = project ?: run {
             fail("尚未打开工程")
@@ -311,6 +313,7 @@ class WorkspaceController(
                 name = name,
                 kind = kind,
                 group = group,
+                uniqueId = uniqueId,
                 sourceDocument = sourceDocument,
             ),
         )
@@ -751,6 +754,72 @@ class WorkspaceController(
     fun clearReference(documentId: DocumentId, fieldPath: JsonPath): Boolean {
         requireEditableTarget(documentId) ?: return false
         return executeCommand(documentId, ClearReferenceCommand("清除引用", fieldPath))
+    }
+
+    // ---------------------------------------------------------------- 外部集成（MCP）
+
+    /**
+     * 确保工程对象文档已打开并返回其 [DocumentId]。
+     * 供 MCP 等外部集成复用编辑器的文档、命令栈与校验。
+     */
+    fun ensureProjectObjectDocument(type: String, name: String): DocumentId? {
+        val current = project ?: run {
+            fail("尚未打开工程")
+            return null
+        }
+        val entry = current.objectOf(type, name) ?: run {
+            fail("工程中不存在对象：$type/$name")
+            return null
+        }
+        return if (openProjectObject(entry)) objectDocumentId(type, name) else null
+    }
+
+    /** 设置标量/列表引用字段，语义与字段视图的引用选择一致。 */
+    fun setReferenceByObject(
+        type: String,
+        name: String,
+        fieldPath: JsonPath,
+        referenceKey: String,
+        warpType: WarpType,
+        index: Int? = null,
+    ): Boolean {
+        val documentId = ensureProjectObjectDocument(type, name) ?: return false
+        val info = fieldInfo(documentId, fieldPath)
+            ?: return fail("无法解析字段：${fieldPath.format()}")
+        val command = when {
+            info.isReference -> SetReferenceCommand(
+                label = "设置引用 ${fieldPath.format()}",
+                fieldPath = fieldPath,
+                referenceKey = referenceKey,
+                warpType = warpType,
+            )
+
+            info.isReferenceList -> AddReferenceToListCommand(
+                label = "添加引用 ${fieldPath.format()}",
+                listFieldPath = fieldPath,
+                referenceKey = referenceKey,
+                warpType = warpType,
+                index = index,
+            )
+
+            else -> return fail("字段不是引用字段：${fieldPath.format()}")
+        }
+        return executeCommand(documentId, command)
+    }
+
+    fun clearReferenceByObject(type: String, name: String, fieldPath: JsonPath): Boolean {
+        val documentId = ensureProjectObjectDocument(type, name) ?: return false
+        return clearReference(documentId, fieldPath)
+    }
+
+    fun removeReferenceByObject(
+        type: String,
+        name: String,
+        fieldPath: JsonPath,
+        index: Int,
+    ): Boolean {
+        val documentId = ensureProjectObjectDocument(type, name) ?: return false
+        return removeReference(documentId, fieldPath, index)
     }
 
     private fun executeCommand(documentId: DocumentId, command: EditCommand): Boolean {
@@ -1294,22 +1363,48 @@ class WorkspaceController(
 
     // ---------------------------------------------------------------- 资源
 
-    suspend fun importResource(source: Path, overwrite: Boolean = false): Boolean {
-        val current = project ?: return fail("尚未打开工程")
+    suspend fun importResource(source: Path, overwrite: Boolean = false): Boolean =
+        importResource(source, key = null, kind = null, overwrite = overwrite) != null
+
+    /**
+     * 导入资源并返回完整结果，供 MCP 等外部集成使用。
+     * [key] / [kind] 为空时沿用 [ResourceImporter] 的默认推断。
+     */
+    suspend fun importResource(
+        source: Path,
+        key: String?,
+        kind: ResourceKind?,
+        overwrite: Boolean = false,
+    ): ResourceImportResult? {
+        val current = project ?: run {
+            fail("尚未打开工程")
+            return null
+        }
         val result = withContext(Dispatchers.IO) {
-            resourceImporter.import(current, source, overwrite = overwrite)
+            if (key == null) {
+                resourceImporter.import(current, source, kind = kind, overwrite = overwrite)
+            } else {
+                resourceImporter.import(
+                    current,
+                    source,
+                    key = key,
+                    kind = kind,
+                    overwrite = overwrite,
+                )
+            }
         }
         diagnostics = result.diagnostics
         if (!result.isSuccess) {
             val message = result.diagnostics.firstOrNull()?.message ?: "资源导入失败"
-            return fail(message)
+            fail(message)
+            return null
         }
         project = result.project
         session.markProjectDirty()
         statusIsError = result.diagnostics.any { it.isError }
         status = "已导入资源：${result.resource?.key}"
         refresh()
-        return true
+        return result
     }
 
     fun removeResource(kind: ResourceKind, key: String): Boolean {

@@ -43,5 +43,7 @@ plugins {
 // Learn more about structuring projects with Gradle - https://docs.gradle.org/8.7/userguide/multi_project_builds.html
 include(":app")
 include(":utils")
+// MCP stdio 服务端：把数据层能力暴露给 Claude Code 等 MCP 客户端。
+include(":mcp")
 
 rootProject.name = "CS-ModEditor-Next"

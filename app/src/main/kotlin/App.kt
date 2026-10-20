@@ -3,6 +3,7 @@ package org.zender.app
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -20,6 +21,8 @@ import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.launch
+import org.zender.app.mcp.ClaudeMcpRegistrar
+import org.zender.app.mcp.EditorMcpWorkspace
 import org.zender.app.platform.FileKitFilePicker
 import org.zender.app.ui.theme.EditorTheme
 import org.zender.app.ui.theme.ThemeMode
@@ -31,6 +34,9 @@ import org.zender.app.ui.workspace.WorkspaceShell
 import org.zender.app.workspace.WorkspaceController
 import org.zender.editor.io.AtomicFileStore
 import org.zender.editor.log.Log
+import org.zender.mcp.McpHttpServer
+import org.zender.mcp.McpProtocol
+import org.zender.mcp.McpToolRegistry
 import org.zender.editor.settings.AppSettings
 import org.zender.editor.settings.SettingsLocations
 import org.zender.editor.settings.SettingsStore
@@ -56,6 +62,23 @@ fun main() = application {
     )
     val controller = remember { WorkspaceController(settingsStore) }
     val state by controller.state.collectAsState()
+
+    // 编辑器启动即暴露 MCP 端点，并自动注册到 Claude Code（user scope）。
+    // 用户只需要打开编辑器，不需要手写 .mcp.json 或执行 claude mcp add。
+    val mcpServer = remember {
+        val server = McpHttpServer(
+            McpProtocol(McpToolRegistry(EditorMcpWorkspace { controller })),
+        )
+        if (server.start()) {
+            ClaudeMcpRegistrar.register(server.endpoint)
+            server
+        } else {
+            null
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { mcpServer?.stop() }
+    }
     val openProjectRegistry = remember { OpenProjectRegistry() }
     val appScope = rememberCoroutineScope()
     val projectWindows = remember { mutableStateListOf<WorkspaceController>() }
