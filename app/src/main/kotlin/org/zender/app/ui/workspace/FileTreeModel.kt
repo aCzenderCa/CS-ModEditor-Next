@@ -2,6 +2,7 @@ package org.zender.app.ui.workspace
 
 import org.zender.editor.pack.DataPack
 import org.zender.editor.project.ModProject
+import org.zender.editor.project.ProjectFolderPath
 
 enum class FileTreeNodeKind {
     METADATA,
@@ -26,6 +27,8 @@ data class FileTreeNode(
     val name: String? = null,
     val dataKey: String? = null,
     val targetGuid: String? = null,
+    /** 类型目录下的子文件夹路径（仅文件夹节点与对象叶子使用）。 */
+    val folder: String? = null,
     val children: List<FileTreeNode> = emptyList(),
 ) {
     val isLeaf: Boolean get() = children.isEmpty()
@@ -71,10 +74,25 @@ object FileTreeBuilder {
                 .filter { it.kind == org.zender.editor.project.ProjectObjectKind.SCRIPTABLE_OBJECT }
                 .groupBy { it.type }
 
-            uniqueIdTypes.keys.sorted().forEach { type ->
-                val children = uniqueIdTypes.getValue(type)
-                    .sortedBy { it.name }
-                    .map { entry ->
+            val uniqueTypes = (
+                uniqueIdTypes.keys + tree.folders
+                    .filter { it.kind == org.zender.editor.project.ProjectObjectKind.UNIQUE_ID }
+                    .map { it.type }
+                ).sorted()
+            val scriptableTypeNames = (
+                scriptableTypes.keys + tree.folders
+                    .filter { it.kind == org.zender.editor.project.ProjectObjectKind.SCRIPTABLE_OBJECT }
+                    .map { it.type }
+                ).sorted()
+
+            uniqueTypes.forEach { type ->
+                val entries = uniqueIdTypes[type].orEmpty().sortedBy { it.name }
+                val children = buildFolderChildren(
+                    idPrefix = "group:uid:$type",
+                    type = type,
+                    folderPaths = tree.foldersOf(type, org.zender.editor.project.ProjectObjectKind.UNIQUE_ID)
+                        .map { it.path },
+                    leaves = entries.map { entry ->
                         FileTreeNode(
                             id = "object:${entry.type}/${entry.name}",
                             label = entry.name,
@@ -82,34 +100,44 @@ object FileTreeBuilder {
                             kind = FileTreeNodeKind.OBJECT,
                             type = entry.type,
                             name = entry.name,
+                            folder = ProjectFolderPath.folderOf(entry.relativePath, entry.type),
                         )
-                    }
+                    },
+                )
                 nodes += FileTreeNode(
                     id = "group:uid:$type",
                     label = type,
-                    detail = "${children.size}",
+                    detail = "${entries.size}",
                     kind = FileTreeNodeKind.GROUP,
                     type = type,
                     children = children,
                 )
             }
 
-            scriptableTypes.keys.sorted().forEach { type ->
-                val children = scriptableTypes.getValue(type)
-                    .sortedBy { it.name }
-                    .map { entry ->
+            scriptableTypeNames.forEach { type ->
+                val entries = scriptableTypes[type].orEmpty().sortedBy { it.name }
+                val children = buildFolderChildren(
+                    idPrefix = "group:so:$type",
+                    type = type,
+                    folderPaths = tree.foldersOf(
+                        type,
+                        org.zender.editor.project.ProjectObjectKind.SCRIPTABLE_OBJECT,
+                    ).map { it.path },
+                    leaves = entries.map { entry ->
                         FileTreeNode(
                             id = "object:${entry.type}/${entry.name}",
                             label = entry.name,
                             kind = FileTreeNodeKind.OBJECT,
                             type = entry.type,
                             name = entry.name,
+                            folder = ProjectFolderPath.folderOf(entry.relativePath, entry.type),
                         )
-                    }
+                    },
+                )
                 nodes += FileTreeNode(
                     id = "group:so:$type",
                     label = "ScriptableObject/$type",
-                    detail = "${children.size}",
+                    detail = "${entries.size}",
                     kind = FileTreeNodeKind.GROUP,
                     type = type,
                     children = children,
@@ -117,23 +145,32 @@ object FileTreeBuilder {
             }
         }
 
-        val gameSourceChildren = tree.gameSourceModifies.values
-            .sortedBy { it.targetGuid }
-            .map { patch ->
-                val target = patch.targetKey ?: pack?.objectEntryByGuid(patch.targetGuid)?.key
-                FileTreeNode(
-                    id = "gsm:${patch.targetGuid}",
-                    label = patch.targetGuid,
-                    detail = target?.let { "${it.type}/${it.name}" },
-                    kind = FileTreeNodeKind.GAME_SOURCE_MODIFY,
-                    targetGuid = patch.targetGuid,
-                )
-            }
+        val gameSourceChildren = buildFolderChildren(
+            idPrefix = "group:gsm",
+            type = null,
+            folderPaths = emptyList(),
+            leaves = tree.gameSourceModifies.values
+                .sortedBy { it.targetGuid }
+                .map { patch ->
+                    val target = patch.targetKey ?: pack?.objectEntryByGuid(patch.targetGuid)?.key
+                    FileTreeNode(
+                        id = "gsm:${patch.targetGuid}",
+                        label = patch.targetGuid,
+                        detail = target?.let { "${it.type}/${it.name}" },
+                        kind = FileTreeNodeKind.GAME_SOURCE_MODIFY,
+                        targetGuid = patch.targetGuid,
+                        folder = ProjectFolderPath.folderUnder(
+                            patch.relativePath,
+                            project.format.gameSourceModifyDirectory(),
+                        ),
+                    )
+                },
+        )
         if (gameSourceChildren.isNotEmpty()) {
             nodes += FileTreeNode(
                 id = "group:gsm",
                 label = project.format.gameSourceModifyDirectory(),
-                detail = "${gameSourceChildren.size}",
+                detail = "${tree.gameSourceModifies.size}",
                 kind = FileTreeNodeKind.GROUP,
                 children = gameSourceChildren,
             )
@@ -225,8 +262,69 @@ object FileTreeBuilder {
         return filter(nodes, filter)
     }
 
-    fun availableTypes(project: ModProject?): List<String> =
-        project?.workingTree?.objects?.values?.map { it.type }?.distinct()?.sorted().orEmpty()
+    private class FolderBuilder(val name: String) {
+        val folders = LinkedHashMap<String, FolderBuilder>()
+        val leaves = mutableListOf<FileTreeNode>()
+
+        fun ensure(segments: List<String>): FolderBuilder {
+            var current = this
+            segments.forEach { segment ->
+                current = current.folders.getOrPut(segment) { FolderBuilder(segment) }
+            }
+            return current
+        }
+
+        fun leafCount(): Int = leaves.size + folders.values.sumOf { it.leafCount() }
+    }
+
+    /**
+     * 把对象/补丁叶子按相对目录组织成多级文件夹节点。
+     * [folderPaths] 用于显示尚未包含对象的空文件夹。
+     */
+    private fun buildFolderChildren(
+        idPrefix: String,
+        type: String?,
+        folderPaths: Collection<String>,
+        leaves: List<FileTreeNode>,
+    ): List<FileTreeNode> {
+        val root = FolderBuilder("")
+        folderPaths.forEach { path ->
+            val segments = path.split('/').filter { it.isNotBlank() }
+            if (segments.isNotEmpty()) root.ensure(segments)
+        }
+        leaves.forEach { leaf ->
+            val segments = leaf.folder?.split('/')?.filter { it.isNotBlank() }.orEmpty()
+            root.ensure(segments).leaves += leaf
+        }
+
+        fun convert(builder: FolderBuilder, parentPath: String): List<FileTreeNode> {
+            val result = mutableListOf<FileTreeNode>()
+            builder.folders.toSortedMap().forEach { (name, child) ->
+                val path = if (parentPath.isBlank()) name else "$parentPath/$name"
+                val count = child.leafCount()
+                result += FileTreeNode(
+                    id = "$idPrefix:$path",
+                    label = name,
+                    detail = count.takeIf { it > 0 }?.toString(),
+                    kind = FileTreeNodeKind.GROUP,
+                    type = type,
+                    folder = path,
+                    children = convert(child, path),
+                )
+            }
+            result += builder.leaves.sortedBy { it.label }
+            return result
+        }
+
+        return convert(root, "")
+    }
+
+    fun availableTypes(project: ModProject?): List<String> {
+        val tree = project?.workingTree ?: return emptyList()
+        return (tree.objects.values.map { it.type } + tree.folders.map { it.type })
+            .distinct()
+            .sorted()
+    }
 
     private fun filter(nodes: List<FileTreeNode>, filter: FileTreeFilter): List<FileTreeNode> {
         val keyword = filter.keyword.trim()
@@ -243,11 +341,7 @@ object FileTreeBuilder {
         }
 
         fun visit(node: FileTreeNode): FileTreeNode? {
-            if (type != null &&
-                (node.kind == FileTreeNodeKind.OBJECT ||
-                    node.kind == FileTreeNodeKind.PACK_OBJECT) &&
-                node.type != type
-            ) {
+            if (type != null && node.type != null && node.type != type) {
                 return null
             }
             val children = node.children.mapNotNull(::visit)

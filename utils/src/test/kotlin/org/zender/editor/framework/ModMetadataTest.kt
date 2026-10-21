@@ -100,6 +100,31 @@ internal class ModMetadataTest {
     }
 
     @Test
+    fun `清空 ML 可选版本字段会从文件中移除`() {
+        val metadata = assertNotNull(
+            MlFormat.readMetadata(read("ml-sample/ModInfo.json")).metadata,
+        ).copy(modLoaderVersion = null, modEditorVersion = null)
+
+        val text = MlFormat.writeMetadata(metadata)
+        assertTrue(!text.contains("ModLoaderVerison"), text)
+        assertTrue(!text.contains("ModLoaderVersion"), text)
+        assertTrue(!text.contains("ModEditorVersion"), text)
+        assertTrue(text.contains("CustomMeta"), text)
+    }
+
+    @Test
+    fun `MC 删除语言后写回不再保留该语言`() {
+        val metadata = assertNotNull(
+            McFormat.readMetadata(read("mc-sample/ModMeta.json")).metadata,
+        ).copy(names = mapOf("SimpCn" to "仅中文"))
+
+        val reparsed = assertNotNull(
+            McFormat.readMetadata(McFormat.writeMetadata(metadata)).metadata,
+        )
+        assertEquals(mapOf("SimpCn" to "仅中文"), reparsed.names)
+    }
+
+    @Test
     fun `MC 元数据写回保留未知字段与未知语言`() {
         val metadata = assertNotNull(
             McFormat.readMetadata(read("mc-sample/ModMeta.json")).metadata,

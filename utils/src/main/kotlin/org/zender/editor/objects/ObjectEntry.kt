@@ -1,6 +1,7 @@
 package org.zender.editor.objects
 
 import org.zender.editor.model.EntryOrigin
+import java.nio.file.Path
 
 /**
  * 数据包中的一个对象条目。
@@ -17,6 +18,8 @@ data class ObjectEntry(
     /** 索引中的中文显示名，例如 `迷你小刀`。 */
     val displayName: String? = null,
     val origin: EntryOrigin = EntryOrigin.BASE_PACK,
+    /** 条目所在的数据包根目录；合并主包/额外包后用于解析 [relativePath]。 */
+    val sourceRoot: Path? = null,
 ) {
     val type: String get() = key.type
 

@@ -151,6 +151,10 @@ data class WorkingTree(
     val dataObjectModifies: Map<DataObjectModifyId, DataObjectModify> = emptyMap(),
     val resources: Map<ResourceId, ProjectResource> = emptyMap(),
     val localization: ProjectLocalization = ProjectLocalization(),
+    /** 显式创建的类型目录子文件夹；对象自身所在的目录会由路径推导，不必重复登记。 */
+    val folders: Set<ProjectFolder> = emptySet(),
+    /** 本次会话删除、需要在保存时从磁盘移除的对象文件（相对工程根目录）。 */
+    val deletedPaths: Set<String> = emptySet(),
 ) {
 
     private val objectsByName: Map<Pair<String, String>, ProjectObject> =
@@ -195,14 +199,20 @@ data class WorkingTree(
         }
         val updated = LinkedHashMap(objects)
         updated[entry.key] = entry
-        return copy(objects = updated)
+        return copy(
+            objects = updated,
+            deletedPaths = deletedPaths - entry.relativePath,
+        )
     }
 
     fun withoutObject(key: ObjectKey): WorkingTree {
-        if (key !in objects) return this
+        val existing = objects[key] ?: return this
         val updated = LinkedHashMap(objects)
         updated.remove(key)
-        return copy(objects = updated)
+        return copy(
+            objects = updated,
+            deletedPaths = deletedPaths + existing.relativePath,
+        )
     }
 
     fun withoutObject(type: String, name: String): WorkingTree {
@@ -252,4 +262,22 @@ data class WorkingTree(
 
     fun withLocalization(localization: ProjectLocalization): WorkingTree =
         copy(localization = localization)
+
+    fun foldersOf(type: String, kind: ProjectObjectKind): List<ProjectFolder> =
+        folders.filter { it.type == type && it.kind == kind }
+            .sortedBy { it.path }
+
+    fun withFolder(folder: ProjectFolder): WorkingTree = withFolders(listOf(folder))
+
+    fun withFolders(entries: Collection<ProjectFolder>): WorkingTree {
+        if (entries.isEmpty()) return this
+        val updated = LinkedHashSet(folders)
+        entries.forEach { updated += it }
+        return copy(folders = updated)
+    }
+
+    fun withoutFolder(folder: ProjectFolder): WorkingTree {
+        if (folder !in folders) return this
+        return copy(folders = folders - folder)
+    }
 }

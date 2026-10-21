@@ -26,11 +26,36 @@ internal class ProjectReadSupport(
     fun directories(directory: Path): List<Path> =
         fileStore.list(directory).filter { fileStore.isDirectory(it) }
 
+    /** 递归列出目录本身及其所有子目录（不包含基准目录）。 */
+    fun walkDirectories(directory: Path): List<Path> {
+        val result = mutableListOf<Path>()
+        val queue = ArrayDeque<Path>()
+        val visited = HashSet<Path>()
+        directories(directory).forEach { if (visited.add(it)) queue.addLast(it) }
+        while (queue.isNotEmpty()) {
+            val current = queue.removeFirst()
+            result.add(current)
+            directories(current).forEach { if (visited.add(it)) queue.addLast(it) }
+        }
+        return result
+    }
+
+    fun relativeTo(base: Path, path: Path): String =
+        try {
+            base.relativize(path).toString().replace('\\', '/')
+        } catch (_: IllegalArgumentException) {
+            path.fileName?.toString().orEmpty()
+        }
+
     fun jsonFiles(directory: Path, includeJsonnet: Boolean): List<Path> =
         fileStore.walkFiles(directory).filter { file ->
             val name = file.fileName.toString().lowercase()
             name.endsWith(".json") || (includeJsonnet && name.endsWith(".jsonnet"))
         }
+
+    /** 类型目录是否包含对象文件或子文件夹；用于保留只有空文件夹的类型。 */
+    fun hasObjectContent(directory: Path, includeJsonnet: Boolean): Boolean =
+        jsonFiles(directory, includeJsonnet).isNotEmpty() || directories(directory).isNotEmpty()
 
     fun readDocument(file: Path, relativePath: String): JsonDocument? {
         val text = try {
@@ -79,6 +104,7 @@ internal class ProjectReadSupport(
 internal class ProjectObjectReader(
     private val support: ProjectReadSupport,
     private val objects: LinkedHashMap<ObjectKey, ProjectObject>,
+    private val folders: MutableSet<ProjectFolder> = LinkedHashSet(),
 ) {
 
     private val namesByType = HashMap<String, MutableSet<String>>()
@@ -89,6 +115,7 @@ internal class ProjectObjectReader(
         directory: Path,
         includeJsonnet: Boolean,
     ) {
+        collectFolders(type, ProjectObjectKind.UNIQUE_ID, directory)
         for (file in support.jsonFiles(directory, includeJsonnet)) {
             val relativePath = support.relative(file)
             val name = ProjectReadSupport.stem(file)
@@ -131,6 +158,7 @@ internal class ProjectObjectReader(
         directory: Path,
         includeJsonnet: Boolean,
     ) {
+        collectFolders(type, ProjectObjectKind.SCRIPTABLE_OBJECT, directory)
         for (file in support.jsonFiles(directory, includeJsonnet)) {
             val relativePath = support.relative(file)
             val name = ProjectReadSupport.stem(file)
@@ -149,6 +177,19 @@ internal class ProjectObjectReader(
                 document = document,
                 relativePath = relativePath,
             )
+        }
+    }
+
+    private fun collectFolders(
+        type: String,
+        kind: ProjectObjectKind,
+        directory: Path,
+    ) {
+        support.walkDirectories(directory).forEach { child ->
+            val relative = support.relativeTo(directory, child)
+            if (relative.isNotBlank()) {
+                folders += ProjectFolder(type = type, path = relative, kind = kind)
+            }
         }
     }
 

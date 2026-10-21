@@ -78,19 +78,30 @@ fun NewObjectDialog(
     val cardTypes = remember(pack, type) {
         pack?.schemaRepository?.schema(type)?.field("CardType")?.enumValues.orEmpty()
     }
+    val presetFolder = presetGroup
+        ?.trim()
+        ?.replace('\\', '/')
+        ?.trim('/')
+        ?.takeIf { it.isNotEmpty() }
+    val presetFolderFirst = presetFolder?.substringBefore('/')
     var group by remember {
         val sourceCardType = (sourceDocument?.root as? JsonNode.ObjectNode)?.get("CardType")
         val sourceGroup = cardTypes.firstOrNull { it.value == sourceCardType }?.name
+        val presetCardType = presetFolderFirst
+            ?.takeIf { candidate -> cardTypes.any { it.name == candidate } }
         mutableStateOf(
-            presetGroup?.takeIf { candidate -> cardTypes.any { it.name == candidate } }
+            presetCardType
                 ?: sourceGroup
                 ?: cardTypes.firstOrNull()?.name,
         )
     }
+    // 从文件树文件夹右键打开时，presetFolder 是完整的目标目录；直接使用，避免重复叠加 CardType。
+    val useAbsoluteFolder = presetFolder != null
+    var subdirectory by remember { mutableStateOf(presetFolder.orEmpty()) }
     var copySource by remember(sourceDocument) { mutableStateOf(sourceDocument) }
     var copySourceName by remember { mutableStateOf(presetSourceName) }
     var sourcePickerOpen by remember { mutableStateOf(false) }
-    var typeMenuOpen by remember { mutableStateOf(false) }
+    var typePickerOpen by remember { mutableStateOf(false) }
     var cardTypeMenuOpen by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -143,34 +154,10 @@ fun NewObjectDialog(
                         textStyle = MaterialTheme.typography.bodySmall,
                         label = { Text("类型") },
                     )
-                    androidx.compose.foundation.layout.Box {
-                        TextButton(
-                            enabled = !typeLocked,
-                            onClick = { typeMenuOpen = true },
-                        ) { Text("选择") }
-                        DropdownMenu(
-                            expanded = typeMenuOpen,
-                            onDismissRequest = { typeMenuOpen = false },
-                        ) {
-                            if (knownTypes.isEmpty()) {
-                                DropdownMenuItem(
-                                    text = { Text("数据包中没有已知类型") },
-                                    onClick = {},
-                                    enabled = false,
-                                )
-                            } else {
-                                knownTypes.forEach { candidate ->
-                                    DropdownMenuItem(
-                                        text = { Text(candidate) },
-                                        onClick = {
-                                            type = candidate
-                                            typeMenuOpen = false
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                    }
+                    TextButton(
+                        enabled = !typeLocked,
+                        onClick = { typePickerOpen = true },
+                    ) { Text("搜索选择…") }
                 }
                 OutlinedTextField(
                     value = name,
@@ -180,7 +167,23 @@ fun NewObjectDialog(
                     textStyle = MaterialTheme.typography.bodySmall,
                     label = { Text("对象名（文件名）") },
                 )
-                if (type == "CardData" && cardTypes.isNotEmpty()) {
+                OutlinedTextField(
+                    value = subdirectory,
+                    onValueChange = { subdirectory = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    label = { Text("子目录（可选，多级用 / 分隔）") },
+                    placeholder = { Text("例如 Weapons/Melee", style = MaterialTheme.typography.bodySmall) },
+                )
+                if (useAbsoluteFolder) {
+                    Text(
+                        text = "目标目录已由文件树指定；CardData 的第一段若为 CardType 会自动同步字段。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (type == "CardData" && cardTypes.isNotEmpty() && !useAbsoluteFolder) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -292,11 +295,26 @@ fun NewObjectDialog(
             TextButton(
                 enabled = type.isNotBlank() && name.isNotBlank(),
                 onClick = {
+                    val folderPath = if (useAbsoluteFolder) {
+                        subdirectory.trim().replace('\\', '/').trim('/').ifBlank { null }
+                    } else {
+                        buildString {
+                            if (type == "CardData" && group != null) {
+                                append(group)
+                                val extra = subdirectory.trim()
+                                    .replace('\\', '/')
+                                    .trim('/')
+                                if (extra.isNotEmpty()) append('/').append(extra)
+                            } else {
+                                append(subdirectory.trim().replace('\\', '/').trim('/'))
+                            }
+                        }.ifBlank { null }
+                    }
                     val created = controller.createProjectObject(
                         type = type.trim(),
                         name = name.trim(),
                         kind = kind,
-                        group = group,
+                        group = folderPath,
                         sourceDocument = copySource,
                     )
                     if (created != null) {
@@ -312,6 +330,17 @@ fun NewObjectDialog(
             TextButton(onClick = onDismiss) { Text("取消") }
         },
     )
+
+    if (typePickerOpen) {
+        ObjectTypePickerDialog(
+            types = knownTypes,
+            onSelect = {
+                type = it
+                typePickerOpen = false
+            },
+            onDismiss = { typePickerOpen = false },
+        )
+    }
 
     if (sourcePickerOpen) {
         DataPackObjectSourceDialog(
@@ -346,6 +375,68 @@ fun NewObjectDialog(
             onDismiss = { sourcePickerOpen = false },
         )
     }
+}
+
+/**
+ * 对象类型选择：支持按名称搜索，避免数据包类型较多时滚动查找。
+ */
+@Composable
+private fun ObjectTypePickerDialog(
+    types: List<String>,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var keyword by remember { mutableStateOf("") }
+    val filtered = remember(types, keyword) {
+        val text = keyword.trim()
+        if (text.isEmpty()) {
+            types
+        } else {
+            types.filter { it.contains(text, ignoreCase = true) }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择对象类型") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(
+                    value = keyword,
+                    onValueChange = { keyword = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    label = { Text("搜索类型") },
+                )
+                if (filtered.isEmpty()) {
+                    Text(
+                        text = if (types.isEmpty()) "数据包中没有已知类型" else "没有匹配的类型",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxWidth().height(300.dp)) {
+                        items(filtered, key = { it }) { candidate ->
+                            Text(
+                                text = candidate,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onSelect(candidate) }
+                                    .padding(vertical = 6.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
 }
 
 @Composable

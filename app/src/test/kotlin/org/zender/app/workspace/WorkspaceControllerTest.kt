@@ -66,6 +66,142 @@ class WorkspaceControllerTest {
     }
 
     @Test
+    fun `校验问题可以打开对象并选中字段`() = withFixture { fixture ->
+        val controller = openedController(fixture)
+        val issue = org.zender.editor.project.ValidationIssue(
+            org.zender.editor.project.ValidationSeverity.WARNING,
+            "test",
+            "测试问题",
+            "CardData/ProjectCard.json:ObjectWeight",
+        )
+        assertTrue(controller.openValidationIssue(issue))
+        assertEquals(
+            WorkspaceController.objectDocumentId("CardData", "ProjectCard"),
+            controller.state.value.session.activeDocumentId,
+        )
+        assertEquals(
+            JsonPath.parse("ObjectWeight"),
+            controller.state.value.session.selection.currentField?.path,
+        )
+
+        val warpIssue = issue.copy(path = "CardData/ProjectCard.json:CardTagsWarpData[0]")
+        assertTrue(controller.openValidationIssue(warpIssue))
+        assertEquals(
+            JsonPath.parse("CardTags"),
+            controller.state.value.session.selection.currentField?.path,
+        )
+
+        assertFalse(controller.openValidationIssue(issue.copy(path = "missing.json:Field")))
+    }
+
+    @Test
+    fun `删除对象后保存会移除磁盘文件`() = withFixture { fixture ->
+        val controller = openedController(fixture)
+        val created = assertNotNull(
+            controller.createProjectObject(
+                type = "CardTag",
+                name = "DeleteMe",
+                kind = ProjectObjectKind.SCRIPTABLE_OBJECT,
+            ),
+        )
+        val file = fixture.projectRoot.resolve(created.relativePath)
+        assertTrue(controller.saveProject())
+        assertTrue(Files.isRegularFile(file), file.toString())
+
+        assertTrue(controller.deleteProjectObject("CardTag", "DeleteMe"))
+        assertTrue(controller.saveProject())
+        assertFalse(Files.exists(file))
+    }
+
+    @Test
+    fun `目录分析可识别标准包与 ML 模板包`() = withFixture { fixture ->
+        val controller = fixture.controller()
+        val standard = controller.analyzePackDirectory(fixture.packRoot)
+        assertTrue(standard.isValid, standard.error.orEmpty())
+        assertEquals("MC", standard.format)
+        assertEquals("TestPack", standard.info?.name)
+        assertTrue(standard.typeCount > 0)
+
+        val mlExtra = fixture.root.resolve("ml-extra")
+        Files.createDirectories(mlExtra.resolve("ScriptableObjectTypeJsonData"))
+        Files.writeString(
+            mlExtra.resolve("ScriptableObjectTypeJsonData/ModEncounter.json"),
+            """{"ThisId":"String"}""",
+        )
+        val ml = controller.analyzePackDirectory(mlExtra)
+        assertTrue(ml.isValid, ml.error.orEmpty())
+        assertEquals("ML", ml.format)
+        assertEquals(org.zender.editor.framework.FrameworkId.ML, ml.framework)
+        assertEquals(1, ml.typeCount)
+
+        assertFalse(controller.analyzePackDirectory(fixture.root).isValid)
+    }
+
+    @Test
+    fun `主包与额外包可以合并加载`() = withFixture { fixture ->
+        val controller = fixture.controller()
+        val mainRoot = fixture.root.resolve("csff-main")
+        Files.createDirectories(mainRoot)
+        Files.writeString(mainRoot.resolve("PackInfo.json"), """{"Name":"CSFF","Version":"test","IsMainPack":true}""")
+
+        assertFalse(
+            controller.addExtraPack(
+                "无效目录",
+                fixture.root.resolve("missing"),
+                listOf("CSFF"),
+                org.zender.editor.framework.FrameworkId.MC,
+            ),
+        )
+        assertTrue(controller.setMainPackPath("CSFF", mainRoot))
+        assertTrue(
+            controller.addExtraPack(
+                "测试额外包",
+                fixture.packRoot,
+                listOf("CSTI", "CSFF"),
+                org.zender.editor.framework.FrameworkId.MC,
+            ),
+        )
+        val extra = controller.state.value.settings.extraPacks.first { it.name == "测试额外包" }
+        assertTrue(extra.belongsTo("CSTI"))
+        assertTrue(extra.belongsTo("CSFF"))
+        assertTrue(controller.setExtraPackEnabled(extra.id, true))
+
+        assertTrue(controller.applyMainPack("CSFF", org.zender.editor.framework.FrameworkId.MC))
+        val pack = assertNotNull(controller.state.value.pack)
+        assertEquals("CSFF", pack.info.name)
+        assertEquals(2, pack.layers.size)
+        assertEquals("TestPack", pack.layers[1].info.name)
+
+        assertTrue(controller.removeExtraPack(extra.id))
+        assertTrue(
+            controller.state.value.settings.extraPacks.none { it.id == extra.id },
+        )
+    }
+
+    @Test
+    fun `编辑元数据后保存写回文件`() {
+        withFixture { fixture ->
+            val controller = openedController(fixture)
+            val metadata = assertNotNull(controller.state.value.project).metadata
+            assertTrue(
+                controller.updateMetadata(
+                    metadata.copy(
+                        author = "New Author",
+                        version = "2.0.0",
+                        modLoaderVersion = "1.4.0",
+                    ),
+                ),
+            )
+            assertTrue(controller.state.value.session.hasUnsavedChanges)
+            assertTrue(controller.saveProject())
+            val text = Files.readString(fixture.projectRoot.resolve("ModInfo.json"))
+            assertTrue(text.contains("\"Author\": \"New Author\""), text)
+            assertTrue(text.contains("\"Version\": \"2.0.0\""), text)
+            assertTrue(text.contains("\"ModLoaderVerison\": \"1.4.0\""), text)
+        }
+    }
+
+    @Test
     fun `非法原始 JSON 保留字段视图并阻止切换`() {
         withFixture { fixture ->
             val controller = openedController(fixture)

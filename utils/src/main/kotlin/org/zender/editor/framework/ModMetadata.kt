@@ -191,7 +191,8 @@ object ModMetadataWriter {
             .withMember("Name", jsonString(metadata.namespace))
             .withMember("Author", jsonString(metadata.author))
             .withMember("Version", jsonString(metadata.version))
-        metadata.modLoaderVersion?.let {
+        val loader = metadata.modLoaderVersion
+        if (loader != null) {
             val key = if (root.contains("ModLoaderVersion") &&
                 !root.contains("ModLoaderVerison")
             ) {
@@ -199,9 +200,16 @@ object ModMetadataWriter {
             } else {
                 "ModLoaderVerison"
             }
-            root = root.withMember(key, jsonString(it))
+            root = root.withMember(key, jsonString(loader))
+        } else {
+            root = root.withoutMember("ModLoaderVerison").withoutMember("ModLoaderVersion")
         }
-        metadata.modEditorVersion?.let { root = root.withMember("ModEditorVersion", jsonString(it)) }
+        val editor = metadata.modEditorVersion
+        if (editor != null) {
+            root = root.withMember("ModEditorVersion", jsonString(editor))
+        } else {
+            root = root.withoutMember("ModEditorVersion")
+        }
         return root.toJsonText(JsonFormat.Pretty())
     }
 
@@ -212,11 +220,11 @@ object ModMetadataWriter {
             .withMember("Namespace", jsonString(metadata.namespace))
             .withMember(
                 "Name",
-                mergeLocalized(root.get("Name"), metadata.names),
+                replaceLocalized(root.get("Name"), metadata.names),
             )
             .withMember(
                 "Description",
-                mergeLocalized(root.get("Description"), metadata.descriptions),
+                replaceLocalized(root.get("Description"), metadata.descriptions),
             )
             .withMember("Author", jsonString(metadata.author))
             .withMember("Version", jsonString(metadata.version))
@@ -228,16 +236,28 @@ object ModMetadataWriter {
         return root.toJsonText(JsonFormat.Pretty())
     }
 
-    private fun mergeLocalized(
+    /**
+     * 用 [values] 完整替换本地化对象：保留未改动语言的顺序，删除已从元数据中移除的语言。
+     */
+    private fun replaceLocalized(
         existing: JsonNode?,
         values: Map<String, String>,
     ): JsonNode {
-        var result = existing as? JsonNode.ObjectNode ?: JsonNode.ObjectNode.EMPTY
+        val current = existing as? JsonNode.ObjectNode ?: JsonNode.ObjectNode.EMPTY
+        var result = current
+        current.members.forEach { member ->
+            if (member.name !in values) result = result.withoutMember(member.name)
+        }
         values.forEach { (language, text) ->
             result = result.withMember(language, jsonString(text))
         }
         return result
     }
+}
+
+internal fun JsonNode.ObjectNode.withoutMember(name: String): JsonNode.ObjectNode {
+    if (get(name) == null) return this
+    return JsonNode.ObjectNode(members.filterNot { it.name == name })
 }
 
 internal fun JsonNode.ObjectNode.withMember(

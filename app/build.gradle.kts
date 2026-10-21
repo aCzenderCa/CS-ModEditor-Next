@@ -61,7 +61,7 @@ compose.desktop {
             // 避免 jdeps 漏判导致打包后的 exe 缺少该模块。
             modules("jdk.httpserver")
             packageName = "CS-ModEditor-Next"
-            packageVersion = "1.0.0"
+            packageVersion = "1.0.1"
             description = "Card Survival Mod Editor (Next)"
             vendor = "zender"
             copyright = "Copyright © 2026 zender"

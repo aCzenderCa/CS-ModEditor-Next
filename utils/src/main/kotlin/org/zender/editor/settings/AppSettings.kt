@@ -32,6 +32,23 @@ data class FavoriteField(
 )
 
 /**
+ * 收藏夹：一组收藏字段。[id] 稳定标识，[name] 由用户设置。
+ */
+@Serializable
+data class FavoriteFolder(
+    val id: String,
+    val name: String,
+    val fields: List<FavoriteField> = emptyList(),
+) {
+    init {
+        require(id.isNotBlank()) { "收藏夹 id 不能为空" }
+        require(name.isNotBlank()) { "收藏夹名称不能为空" }
+    }
+
+    val displayName: String get() = name.ifBlank { "收藏夹" }
+}
+
+/**
  * 最近打开的数据包目录记录。
  *
  * 保存路径与打开时读取到的元信息，设置页/数据包选择页无需重新扫描即可展示。
@@ -51,6 +68,67 @@ data class RecentPack(
             runCatching { Paths.get(path).fileName?.toString().orEmpty() }.getOrDefault(path)
         }
 }
+
+/**
+ * 主数据包：CSTI 或 CSFF。路径由用户自行选择，不提供默认本机路径。
+ */
+@Serializable
+data class MainPackConfig(
+    /** 主包标识：`CSTI` / `CSFF`。 */
+    val kind: String,
+    val name: String = kind,
+    val path: String? = null,
+) {
+    val displayName: String
+        get() = name.ifBlank { kind }
+}
+
+/**
+ * 用户导入的额外数据包。额外包归属于某个主包，加载时叠加在主包之上。
+ *
+ * [mainPackKind] 为 `CSTI` 或 `CSFF`；[enabled] 关闭时不会参与合并加载。
+ */
+@Serializable
+data class ExtraPackConfig(
+    /** 规范化后的数据包目录，作为稳定 id。 */
+    val id: String,
+    val name: String,
+    val path: String,
+    /** 归属的主包，可同时属于 CSTI 与 CSFF。 */
+    val mainPackKinds: List<String> = emptyList(),
+    /** 框架：`MC` 或 `ML`。不同框架的额外包格式不同，不能混用。 */
+    val framework: String,
+    val enabled: Boolean = true,
+    /** 旧版本的单主包字段；读取时并入 [mainPackKinds]，写回时不再使用。 */
+    val mainPackKind: String? = null,
+) {
+    val displayName: String
+        get() = name.ifBlank {
+            runCatching { Paths.get(path).fileName?.toString().orEmpty() }.getOrDefault(path)
+        }
+
+    /** 去重并规范化为大写；兼容旧版 [mainPackKind]。 */
+    val effectiveMainPackKinds: List<String>
+        get() = (mainPackKinds + listOfNotNull(mainPackKind))
+            .map { it.trim().uppercase() }
+            .filter { it.isNotBlank() }
+            .distinct()
+
+    fun belongsTo(kind: String): Boolean =
+        effectiveMainPackKinds.any { it.equals(kind, ignoreCase = true) }
+}
+
+/**
+ * 某个工程选定的数据包组合：主包 + 额外包。
+ */
+@Serializable
+data class ProjectPackTarget(
+    val mainPackKind: String,
+    val mainPackPath: String,
+    /** 组合适用的框架：`MC` / `ML`。 */
+    val framework: String = "MC",
+    val extraPackPaths: List<String> = emptyList(),
+)
 
 /**
  * 已分离的编辑窗口。内容键是 `DocumentId`，窗口几何单位为 dp。
@@ -74,10 +152,19 @@ data class DetachedWindowSettings(
 data class AppSettings(
     val schemaVersion: Int = CURRENT_SCHEMA_VERSION,
     val window: WindowSettings = WindowSettings(),
+    /** 收藏夹；字段收藏按收藏夹组织。 */
+    val favoriteFolders: List<FavoriteFolder> = emptyList(),
+    /** 旧版单一收藏列表；读取时迁移到 [favoriteFolders]，写回时作为镜像保留。 */
     val favoriteFields: List<FavoriteField> = emptyList(),
     val recentDirectories: List<String> = emptyList(),
     val recentProjects: List<String> = emptyList(),
     val recentPacks: Map<String, String> = emptyMap(),
+    /** 两种主包（CSTI / CSFF）的本地目录配置。 */
+    val mainPacks: List<MainPackConfig> = DEFAULT_MAIN_PACKS,
+    /** 用户导入的额外数据包。 */
+    val extraPacks: List<ExtraPackConfig> = emptyList(),
+    /** 工程目录 → 主包 + 额外包组合。 */
+    val projectPackTargets: Map<String, ProjectPackTarget> = emptyMap(),
     /** 最近打开的数据包目录，按最后打开时间从新到旧排列。 */
     val recentPackDirectories: List<RecentPack> = emptyList(),
     val language: String? = null,
@@ -107,6 +194,46 @@ data class AppSettings(
     fun withRecentPack(game: String, pack: Path): AppSettings =
         copy(recentPacks = recentPacks + (game to pack.toString()))
 
+    fun mainPack(kind: String): MainPackConfig? =
+        mainPacks.firstOrNull { it.kind.equals(kind, ignoreCase = true) }
+
+    /** 设置某个主包的本地目录。 */
+    fun withMainPackPath(kind: String, path: Path?): AppSettings {
+        val normalizedKind = kind.uppercase()
+        val value = path?.let { normalizePackPath(it.toString()) }
+        val existing = mainPacks
+        val updated = if (existing.any { it.kind.equals(normalizedKind, ignoreCase = true) }) {
+            existing.map {
+                if (it.kind.equals(normalizedKind, ignoreCase = true)) it.copy(path = value) else it
+            }
+        } else {
+            existing + MainPackConfig(kind = normalizedKind, path = value)
+        }
+        return copy(mainPacks = updated)
+    }
+
+    /** 新增或按 id / 数据包路径覆盖一条额外数据包配置。 */
+    fun withExtraPack(config: ExtraPackConfig): AppSettings {
+        val normalized = normalizePackPath(config.path)
+        return copy(
+            extraPacks = listOf(config) + extraPacks.filterNot {
+                it.id == config.id || normalizePackPath(it.path) == normalized
+            },
+        )
+    }
+
+    fun withoutExtraPack(id: String): AppSettings =
+        copy(extraPacks = extraPacks.filterNot { it.id == id })
+
+    fun withProjectPackTarget(project: Path, target: ProjectPackTarget): AppSettings {
+        val key = normalizePackPath(project.toString())
+        return copy(projectPackTargets = projectPackTargets + (key to target))
+    }
+
+    private fun normalizePackPath(path: String): String =
+        runCatching { Paths.get(path).toAbsolutePath().normalize().toString() }
+            .getOrDefault(path)
+
     /**
      * 把数据包目录移到最前；同一路径只保留最新一条。
      */
@@ -123,13 +250,83 @@ data class AppSettings(
     fun withoutRecentPackDirectory(path: String): AppSettings =
         copy(recentPackDirectories = recentPackDirectories.filterNot { it.path == path })
 
-    fun withFavoriteField(type: String, fieldPath: String): AppSettings {
+    /** 兼容旧版单一收藏列表：没有收藏夹时把旧字段放进「默认收藏」。 */
+    fun effectiveFavoriteFolders(): List<FavoriteFolder> =
+        if (favoriteFolders.isNotEmpty() || favoriteFields.isEmpty()) {
+            favoriteFolders
+        } else {
+            listOf(FavoriteFolder(DEFAULT_FAVORITE_FOLDER_ID, "默认收藏", favoriteFields))
+        }
+
+    fun allFavoriteFields(): List<FavoriteField> =
+        effectiveFavoriteFolders().flatMap { it.fields }.distinct()
+
+    /**
+     * 收藏字段。省略 [folderId] 时放进第一个收藏夹；没有收藏夹时自动创建默认收藏夹。
+     * 同一字段会从其他收藏夹移除，保证全局唯一。
+     */
+    fun withFavoriteField(
+        type: String,
+        fieldPath: String,
+        folderId: String? = null,
+    ): AppSettings {
         val favorite = FavoriteField(type, fieldPath)
-        return copy(favoriteFields = (listOf(favorite) + favoriteFields.filterNot { it == favorite }).take(MAX_FAVORITE_FIELDS))
+        val folders = effectiveFavoriteFolders().ifEmpty {
+            listOf(FavoriteFolder(DEFAULT_FAVORITE_FOLDER_ID, "默认收藏"))
+        }
+        val targetId = folderId?.takeIf { id -> folders.any { it.id == id } }
+            ?: folders.first().id
+        val updated = folders.map { folder ->
+            val remaining = folder.fields.filterNot { it == favorite }
+            if (folder.id == targetId) {
+                folder.copy(fields = (listOf(favorite) + remaining).take(MAX_FAVORITE_FIELDS))
+            } else {
+                folder.copy(fields = remaining)
+            }
+        }
+        return copyWithFavorites(updated)
     }
 
-    fun withoutFavoriteField(type: String, fieldPath: String): AppSettings =
-        copy(favoriteFields = favoriteFields.filterNot { it.type == type && it.fieldPath == fieldPath })
+    fun withoutFavoriteField(type: String, fieldPath: String): AppSettings {
+        val favorite = FavoriteField(type, fieldPath)
+        return copyWithFavorites(
+            effectiveFavoriteFolders().map { folder ->
+                folder.copy(fields = folder.fields.filterNot { it == favorite })
+            },
+        )
+    }
+
+    /** 新增收藏夹；同 id 时覆盖。 */
+    fun withFavoriteFolder(folder: FavoriteFolder): AppSettings {
+        val folders = effectiveFavoriteFolders()
+        val updated = if (folders.any { it.id == folder.id }) {
+            folders.map { if (it.id == folder.id) folder else it }
+        } else {
+            folders + folder
+        }
+        return copyWithFavorites(updated)
+    }
+
+    fun withoutFavoriteFolder(id: String): AppSettings =
+        copyWithFavorites(effectiveFavoriteFolders().filterNot { it.id == id })
+
+    fun renameFavoriteFolder(id: String, name: String): AppSettings {
+        if (name.isBlank()) return this
+        return copyWithFavorites(
+            effectiveFavoriteFolders().map {
+                if (it.id == id) it.copy(name = name.trim()) else it
+            },
+        )
+    }
+
+    fun clearFavoriteFields(): AppSettings =
+        copyWithFavorites(effectiveFavoriteFolders().map { it.copy(fields = emptyList()) })
+
+    private fun copyWithFavorites(folders: List<FavoriteFolder>): AppSettings =
+        copy(
+            favoriteFolders = folders,
+            favoriteFields = folders.flatMap { it.fields }.distinct(),
+        )
 
     fun withDetachedWindows(windows: List<DetachedWindowSettings>): AppSettings =
         copy(detachedWindows = windows.take(MAX_DETACHED_WINDOWS))
@@ -161,8 +358,17 @@ data class AppSettings(
         const val MAX_RECENT_ENTRIES: Int = 10
         const val MAX_RECENT_PACKS: Int = 10
         const val MAX_FAVORITE_FIELDS: Int = 500
+        const val DEFAULT_FAVORITE_FOLDER_ID: String = "default"
         const val MAX_DETACHED_WINDOWS: Int = 8
         val DEFAULT_LOCALIZATION_LANGUAGES: List<String> = listOf("SimpCn", "En")
+
+        /**
+         * 两种主包的标识；本地目录必须由用户自行选择，不预置任何本机路径。
+         */
+        val DEFAULT_MAIN_PACKS: List<MainPackConfig> = listOf(
+            MainPackConfig(kind = "CSTI", name = "Card Survival: Tropical Island"),
+            MainPackConfig(kind = "CSFF", name = "Card Survival: Fantasy Forest"),
+        )
 
         private fun prependUnique(value: String, values: List<String>, limit: Int): List<String> =
             (listOf(value) + values.filterNot { it == value }).take(limit.coerceAtLeast(0))

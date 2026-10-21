@@ -83,6 +83,41 @@ internal class FavoriteFieldStoreTest {
     }
 
     @Test
+    fun `收藏夹可以添加并分别收藏`() {
+        val first = store.addFolder("战斗")
+        val second = store.addFolder("界面")
+        store.addToFolder("CardData", "CardType", first.id)
+        store.addToFolder("CardData", "CardName", second.id)
+
+        assertEquals(2, store.folders().size)
+        assertEquals(
+            listOf("CardType"),
+            store.folders().first { it.id == first.id }.fields.map { it.fieldPath },
+        )
+        assertEquals(
+            listOf("CardName"),
+            store.folders().first { it.id == second.id }.fields.map { it.fieldPath },
+        )
+
+        store.removeFolder(first.id)
+        assertEquals(1, store.folders().size)
+        assertFalse(store.isFavorite("CardData", "CardType"))
+        assertTrue(store.isFavorite("CardData", "CardName"))
+    }
+
+    @Test
+    fun `同一字段移动到另一个收藏夹`() {
+        val first = store.addFolder("A")
+        val second = store.addFolder("B")
+        store.addToFolder("CardData", "CardType", first.id)
+        store.addToFolder("CardData", "CardType", second.id)
+
+        assertEquals(1, store.favorites().size)
+        assertEquals(0, store.folders().first { it.id == first.id }.fields.size)
+        assertEquals(1, store.folders().first { it.id == second.id }.fields.size)
+    }
+
+    @Test
     fun `类型或路径为空时拒绝写入`() {
         assertFailsWith<IllegalArgumentException> {
             store.setFavorite("", "CardType", true)

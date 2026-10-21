@@ -67,6 +67,70 @@ internal class SettingsStoreTest {
     }
 
     @Test
+    fun `主包与额外包配置可持久化并去重`() = withTempDir { dir ->
+        val store = storeAt(dir)
+        val base = AppSettings()
+        assertTrue(base.mainPacks.none { it.path != null })
+
+        val main = base.withMainPackPath("csti", Path.of("D:/packs/csti"))
+        assertEquals(
+            Path.of("D:/packs/csti").toAbsolutePath().normalize().toString(),
+            main.mainPack("CSTI")?.path,
+        )
+
+        val first = ExtraPackConfig(
+            id = "p1",
+            name = "额外包 A",
+            path = "D:/packs/a",
+            mainPackKinds = listOf("CSTI"),
+            framework = "MC",
+        )
+        val second = ExtraPackConfig(
+            id = "p2",
+            name = "额外包 B",
+            path = "D:/packs/b",
+            mainPackKinds = listOf("CSFF"),
+            framework = "ML",
+        )
+        val settings = main
+            .withExtraPack(first)
+            .withExtraPack(second)
+            .withExtraPack(first.copy(name = "额外包 A2"))
+        assertEquals("额外包 A2", settings.extraPacks.first { it.id == "p1" }.name)
+        assertEquals(1, settings.extraPacks.count { it.id == "p1" })
+
+        val samePath = settings.withExtraPack(
+            ExtraPackConfig(
+                id = "p3",
+                name = "额外包 B2",
+                path = "D:\\packs\\b",
+                mainPackKinds = listOf("CSFF"),
+                framework = "ML",
+            ),
+        )
+        assertEquals(1, samePath.extraPacks.count { it.name.startsWith("额外包 B") })
+
+        val multi = first.copy(mainPackKinds = listOf("CSTI", "CSFF"))
+        assertTrue(multi.belongsTo("csti"))
+        assertTrue(multi.belongsTo("CSFF"))
+
+        val legacy = first.copy(mainPackKind = "CSFF")
+        assertTrue(legacy.belongsTo("CSFF"))
+
+        val target = ProjectPackTarget(
+            mainPackKind = "CSTI",
+            mainPackPath = "D:/packs/csti",
+            framework = "MC",
+            extraPackPaths = listOf("D:/packs/a"),
+        )
+        val withTarget = settings.withProjectPackTarget(Path.of("D:/project"), target)
+        assertNotNull(withTarget.projectPackTargets.values.firstOrNull())
+
+        store.save(settings)
+        assertEquals(settings, store.load())
+    }
+
+    @Test
     fun `损坏的设置文件回退默认值并记录警告`() = withTempDir { dir ->
         val sink = CapturingSink()
         val store = storeAt(dir, sink)
@@ -116,6 +180,42 @@ internal class SettingsStoreTest {
 
         assertEquals(1, removed.favoriteFields.size)
         assertEquals("CardDescription", removed.favoriteFields.single().fieldPath)
+    }
+
+    @Test
+    fun `收藏夹可增删且字段全局唯一`() {
+        val folderA = FavoriteFolder("a", "收藏夹 A")
+        val folderB = FavoriteFolder("b", "收藏夹 B")
+        val settings = AppSettings()
+            .withFavoriteFolder(folderA)
+            .withFavoriteFolder(folderB)
+            .withFavoriteField("CardData", "CardType", "a")
+            .withFavoriteField("CardData", "CardType", "b")
+
+        assertEquals(1, settings.allFavoriteFields().size)
+        assertEquals(
+            0,
+            settings.effectiveFavoriteFolders().first { it.id == "a" }.fields.size,
+        )
+        assertEquals(
+            1,
+            settings.effectiveFavoriteFolders().first { it.id == "b" }.fields.size,
+        )
+
+        val removed = settings.withoutFavoriteFolder("b")
+        assertEquals(1, removed.effectiveFavoriteFolders().size)
+        assertTrue(removed.allFavoriteFields().isEmpty())
+    }
+
+    @Test
+    fun `旧版收藏字段迁移为默认收藏夹`() {
+        val legacy = AppSettings(
+            favoriteFields = listOf(FavoriteField("CardData", "CardType")),
+        )
+        val folders = legacy.effectiveFavoriteFolders()
+        assertEquals(1, folders.size)
+        assertEquals("默认收藏", folders.single().name)
+        assertEquals(1, legacy.allFavoriteFields().size)
     }
 
     @Test

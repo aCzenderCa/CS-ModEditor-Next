@@ -73,7 +73,8 @@ class McProjectReader(
 
     private fun buildTree(support: ProjectReadSupport, basePack: DataPack?): WorkingTree {
         val objects = LinkedHashMap<ObjectKey, ProjectObject>()
-        val objectReader = ProjectObjectReader(support, objects)
+        val folders = LinkedHashSet<ProjectFolder>()
+        val objectReader = ProjectObjectReader(support, objects, folders)
         val dataRoot = support.projectRoot.resolve("Data")
         val dataTypeNames = LinkedHashSet<String>()
 
@@ -82,7 +83,7 @@ class McProjectReader(
             for (directory in support.directories(dataRoot)) {
                 val type = directory.fileName.toString()
                 if (type in DATA_RESERVED) continue
-                if (support.jsonFiles(directory, includeJsonnet = false).isEmpty()) continue
+                if (!support.hasObjectContent(directory, includeJsonnet = false)) continue
                 dataTypeNames += type
                 objectReader.readUniqueIdType(type, directory, includeJsonnet = false)
             }
@@ -113,6 +114,7 @@ class McProjectReader(
             dataObjectModifies = dataObjectModifies.toMap(),
             resources = resources.toMap(),
             localization = localizationResult.localization,
+            folders = folders.toSet(),
         )
     }
 
@@ -129,7 +131,7 @@ class McProjectReader(
             if (type == "ScriptableObject") continue
             if (McFormat.isReservedRootDirectory(type)) continue
             if (type !in basePack.objectIndex.guidIndexTypes) continue
-            if (support.jsonFiles(directory, includeJsonnet = false).isEmpty()) continue
+            if (!support.hasObjectContent(directory, includeJsonnet = false)) continue
             reader.readUniqueIdType(type, directory, includeJsonnet = false)
         }
     }

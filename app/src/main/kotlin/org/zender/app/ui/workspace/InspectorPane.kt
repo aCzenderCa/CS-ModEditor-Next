@@ -1,6 +1,7 @@
 package org.zender.app.ui.workspace
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -139,7 +140,9 @@ fun InspectorPane(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                issues.take(40).forEach { issue -> IssueRow(issue) }
+                issues.take(40).forEach { issue ->
+                    IssueRow(issue) { controller.openValidationIssue(issue) }
+                }
                 if (issues.size > 40) {
                     Text(
                         text = "还有 ${issues.size - 40} 条，请运行工程校验查看完整结果。",
@@ -189,9 +192,15 @@ fun InspectorPane(
 }
 
 @Composable
-private fun IssueRow(issue: org.zender.editor.project.ValidationIssue) {
+private fun IssueRow(
+    issue: org.zender.editor.project.ValidationIssue,
+    onClick: () -> Unit,
+) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = issue.path != null, onClick = onClick)
+            .padding(vertical = 3.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         StatusChip(

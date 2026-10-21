@@ -104,6 +104,37 @@ class ProjectObjectFactoryTest {
     }
 
     @Test
+    fun `分组目录支持多级路径`() {
+        val result = ProjectObjectFactory(pack).create(
+            emptyProject(),
+            NewObjectRequest(
+                type = "CardData",
+                name = "DeepCard",
+                group = "Item/Weapons/Melee",
+            ),
+        )
+        assertTrue(result.isSuccess, result.diagnostics.joinToString())
+        val entry = assertNotNull(result.objectEntry)
+        assertEquals("CardData/Item/Weapons/Melee/DeepCard.json", entry.relativePath)
+        val root = entry.document.root as JsonNode.ObjectNode
+        // 第一段 Item 是 CardType，仍然写回字段。
+        assertEquals(0.0, (root.get("CardType") as JsonNode.NumberNode).toDouble())
+    }
+
+    @Test
+    fun `非 CardData 对象也可以放在多级目录`() {
+        val result = ProjectObjectFactory(pack).create(
+            emptyProject(),
+            NewObjectRequest(type = "CardTag", name = "DeepTag", group = "Labels/Melee"),
+        )
+        assertTrue(result.isSuccess, result.diagnostics.joinToString())
+        assertEquals(
+            "ScriptableObject/CardTag/Labels/Melee/DeepTag.json",
+            assertNotNull(result.objectEntry).relativePath,
+        )
+    }
+
+    @Test
     fun `重复对象名被拒绝`() {
         val first = ProjectObjectFactory(pack).create(
             emptyProject(),

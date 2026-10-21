@@ -1,5 +1,6 @@
 package org.zender.app.ui.workspace
 
+import androidx.compose.foundation.HorizontalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
@@ -35,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isTertiaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
@@ -52,17 +55,39 @@ fun FileTabBar(
     state: WorkspaceUiState,
     onCloseRequest: (DocumentId) -> Unit,
 ) {
-    Row(
+    val scrollState = rememberScrollState()
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(38.dp)
             .background(MaterialTheme.colorScheme.surface),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(
-            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+            modifier = Modifier.fillMaxWidth().height(38.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxSize()
+                    // 鼠标滚轮纵向滚动也映射为标签栏横向滚动。
+                    .pointerInput(scrollState) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                if (event.type != PointerEventType.Scroll) continue
+                                val delta = event.changes.firstOrNull()?.scrollDelta
+                                    ?: continue
+                                val amount = if (delta.x != 0f) delta.x else delta.y
+                                if (amount != 0f) {
+                                    scrollState.dispatchRawDelta(amount)
+                                    event.changes.forEach { it.consume() }
+                                }
+                            }
+                        }
+                    }
+                    .horizontalScroll(scrollState),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
             if (state.session.documentOrder.isEmpty()) {
                 Text(
                     text = if (state.project == null) "未打开文件" else "从左侧文件树打开对象或补丁",
@@ -127,18 +152,25 @@ fun FileTabBar(
                 HorizontalSeparator()
             }
         }
-        val activeId = state.session.activeDocumentId
-        if (activeId != null) {
-            IconButton(
-                onClick = { controller.openInNewWindow(activeId) },
-                modifier = Modifier.size(34.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
-                    contentDescription = "在新窗口打开",
-                    modifier = Modifier.size(17.dp),
-                )
+            val activeId = state.session.activeDocumentId
+            if (activeId != null) {
+                IconButton(
+                    onClick = { controller.openInNewWindow(activeId) },
+                    modifier = Modifier.size(34.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
+                        contentDescription = "在新窗口打开",
+                        modifier = Modifier.size(17.dp),
+                    )
+                }
             }
+        }
+        if (scrollState.maxValue > 0) {
+            HorizontalScrollbar(
+                adapter = rememberScrollbarAdapter(scrollState),
+                modifier = Modifier.fillMaxWidth().height(7.dp),
+            )
         }
     }
 }
@@ -148,6 +180,7 @@ fun EditorArea(
     controller: WorkspaceController,
     state: WorkspaceUiState,
     onOpenProject: () -> Unit,
+    onNewProject: () -> Unit = {},
     onChoosePack: () -> Unit,
 ) {
     val activeId = state.session.activeDocumentId
@@ -156,6 +189,7 @@ fun EditorArea(
         EmptyWorkspace(
             state = state,
             onOpenProject = onOpenProject,
+            onNewProject = onNewProject,
             onChoosePack = onChoosePack,
         )
         return
@@ -257,6 +291,7 @@ private fun ViewModeButton(text: String, selected: Boolean, onClick: () -> Unit)
 private fun EmptyWorkspace(
     state: WorkspaceUiState,
     onOpenProject: () -> Unit,
+    onNewProject: () -> Unit,
     onChoosePack: () -> Unit,
 ) {
     Box(
@@ -292,6 +327,9 @@ private fun EmptyWorkspace(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (state.project == null) {
+                    OutlinedButton(onClick = onNewProject) { Text("新建 Mod 工程") }
+                }
                 Button(onClick = onOpenProject) { Text("打开工程目录") }
                 OutlinedButton(onClick = onChoosePack) { Text("选择游戏数据包") }
             }

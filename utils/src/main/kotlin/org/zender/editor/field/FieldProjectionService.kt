@@ -118,7 +118,25 @@ class FieldProjectionService(
             )
         }
         if (context.options.includeUnknown) {
-            rows += unknownRows(node, basePath, context, schema.fieldNames)
+            // 引用字段的 WarpData / WarpType 由引用编辑器统一处理，不再作为未知字段展示。
+            val hiddenWarpNames = schema.fields.asSequence()
+                .filter { field ->
+                    field.kind == FieldKind.REFERENCE ||
+                        (field.kind == FieldKind.LIST && field.elementKind == FieldKind.REFERENCE)
+                }
+                .flatMap { field ->
+                    sequenceOf(
+                        WarpFields.dataName(field.name),
+                        WarpFields.typeName(field.name),
+                    )
+                }
+                .toSet()
+            rows += unknownRows(
+                node,
+                basePath,
+                context,
+                schema.fieldNames + hiddenWarpNames,
+            )
         }
         return rows
     }

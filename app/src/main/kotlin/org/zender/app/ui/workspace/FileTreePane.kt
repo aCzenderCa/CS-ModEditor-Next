@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.FolderOpen
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Notes
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -61,6 +63,21 @@ import org.zender.editor.project.ProjectObjectKind
 
 private data class VisibleTreeNode(val node: FileTreeNode, val depth: Int)
 
+private data class FolderCreationTarget(
+    val type: String,
+    val kind: ProjectObjectKind,
+    val parent: String?,
+    /** 从工具栏打开时允许选择类型/对象种类；从类型文件夹右键打开时固定。 */
+    val allowTypeChange: Boolean = false,
+)
+
+private fun objectKindForGroupId(id: String): ProjectObjectKind =
+    if (id.startsWith("group:so:")) {
+        ProjectObjectKind.SCRIPTABLE_OBJECT
+    } else {
+        ProjectObjectKind.UNIQUE_ID
+    }
+
 @Composable
 fun FileTreePane(
     controller: WorkspaceController,
@@ -75,11 +92,15 @@ fun FileTreePane(
     var showNewObject by remember { mutableStateOf(false) }
     var newObjectType by remember { mutableStateOf<String?>(null) }
     var newObjectKind by remember { mutableStateOf<ProjectObjectKind?>(null) }
+    var newObjectGroup by remember { mutableStateOf<String?>(null) }
     var newObjectName by remember { mutableStateOf<String?>(null) }
     var newObjectSource by remember { mutableStateOf<JsonDocument?>(null) }
     var newObjectSourceName by remember { mutableStateOf<String?>(null) }
     var newObjectTypeLocked by remember { mutableStateOf(false) }
     var newObjectKindLocked by remember { mutableStateOf(false) }
+    var newFolderTarget by remember { mutableStateOf<FolderCreationTarget?>(null) }
+    var newFolderName by remember { mutableStateOf("") }
+    var deleteTarget by remember { mutableStateOf<FileTreeNode?>(null) }
     val expanded = remember(state.projectRoot) { mutableStateMapOf<String, Boolean>() }
 
     fun openNewObject(
@@ -90,9 +111,11 @@ fun FileTreePane(
         sourceName: String? = null,
         typeLocked: Boolean = false,
         kindLocked: Boolean = false,
+        group: String? = null,
     ) {
         newObjectType = type
         newObjectKind = kind
+        newObjectGroup = group
         newObjectName = name
         newObjectSource = source
         newObjectSourceName = sourceName
@@ -134,6 +157,24 @@ fun FileTreePane(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (state.project != null) {
+                IconButton(
+                    onClick = {
+                        newFolderName = ""
+                        newFolderTarget = FolderCreationTarget(
+                            type = typeFilter ?: "",
+                            kind = ProjectObjectKind.UNIQUE_ID,
+                            parent = null,
+                            allowTypeChange = true,
+                        )
+                    },
+                    modifier = Modifier.size(24.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.CreateNewFolder,
+                        contentDescription = "新建文件夹",
+                        modifier = Modifier.size(15.dp),
+                    )
+                }
                 IconButton(
                     onClick = { openNewObject(type = null) },
                     modifier = Modifier.size(24.dp),
@@ -224,6 +265,7 @@ fun FileTreePane(
                     val isExpanded = expanded[node.id]
                         ?: (item.depth == 0 && node.kind == FileTreeNodeKind.GROUP)
                     val selected = node.id == activeId ||
+                        (node.kind == FileTreeNodeKind.METADATA && activeScreen == WorkspaceScreen.METADATA) ||
                         (node.kind == FileTreeNodeKind.LOCALIZATION && activeScreen == WorkspaceScreen.LOCALIZATION) ||
                         (node.kind == FileTreeNodeKind.RESOURCE && activeScreen == WorkspaceScreen.RESOURCES)
                     val contextActions = when {
@@ -261,21 +303,62 @@ fun FileTreePane(
                             }
                         }
 
-                        node.kind == FileTreeNodeKind.GROUP &&
-                            node.id.startsWith("group:uid:") ->
+                        node.kind == FileTreeNodeKind.OBJECT -> listOf(
+                            "删除对象…" to { deleteTarget = node },
+                        )
+
+                        // 类型目录下的子文件夹（对象还可以继续嵌套多层）。
+                        node.kind == FileTreeNodeKind.GROUP && node.folder != null &&
+                            node.type != null -> {
+                            val type = node.type
+                            val kind = objectKindForGroupId(node.id)
+                            val folder = node.folder
                             listOf(
-                                "新建 ${node.type} 对象" to {
-                                    openNewObject(node.type, ProjectObjectKind.UNIQUE_ID)
+                                "在此文件夹新建 $type 对象" to {
+                                    openNewObject(type, kind, group = folder)
+                                },
+                                "新建子文件夹…" to {
+                                    newFolderName = ""
+                                    newFolderTarget = FolderCreationTarget(type, kind, folder)
                                 },
                             )
+                        }
 
                         node.kind == FileTreeNodeKind.GROUP &&
-                            node.id.startsWith("group:so:") ->
+                            node.id.startsWith("group:uid:") -> {
+                            val type = node.type.orEmpty()
                             listOf(
-                                "新建 ${node.type} 对象" to {
-                                    openNewObject(node.type, ProjectObjectKind.SCRIPTABLE_OBJECT)
+                                "新建 $type 对象" to {
+                                    openNewObject(type, ProjectObjectKind.UNIQUE_ID)
+                                },
+                                "新建子文件夹…" to {
+                                    newFolderName = ""
+                                    newFolderTarget = FolderCreationTarget(
+                                        type,
+                                        ProjectObjectKind.UNIQUE_ID,
+                                        null,
+                                    )
                                 },
                             )
+                        }
+
+                        node.kind == FileTreeNodeKind.GROUP &&
+                            node.id.startsWith("group:so:") -> {
+                            val type = node.type.orEmpty()
+                            listOf(
+                                "新建 $type 对象" to {
+                                    openNewObject(type, ProjectObjectKind.SCRIPTABLE_OBJECT)
+                                },
+                                "新建子文件夹…" to {
+                                    newFolderName = ""
+                                    newFolderTarget = FolderCreationTarget(
+                                        type,
+                                        ProjectObjectKind.SCRIPTABLE_OBJECT,
+                                        null,
+                                    )
+                                },
+                            )
+                        }
 
                         node.kind == FileTreeNodeKind.GROUP &&
                             node.id.startsWith("pack:group:") ->
@@ -328,9 +411,11 @@ fun FileTreePane(
                                 FileTreeNodeKind.RESOURCE ->
                                     controller.setScreen(WorkspaceScreen.RESOURCES)
 
-                                FileTreeNodeKind.METADATA,
-                                FileTreeNodeKind.GROUP,
-                                -> controller.setScreen(WorkspaceScreen.FILES)
+                                FileTreeNodeKind.METADATA ->
+                                    controller.setScreen(WorkspaceScreen.METADATA)
+
+                                FileTreeNodeKind.GROUP ->
+                                    controller.setScreen(WorkspaceScreen.FILES)
                             }
                         },
                     )
@@ -345,6 +430,7 @@ fun FileTreePane(
             state = state,
             presetType = newObjectType,
             presetKind = newObjectKind,
+            presetGroup = newObjectGroup,
             defaultName = newObjectName,
             presetSourceName = newObjectSourceName,
             sourceDocument = newObjectSource,
@@ -354,11 +440,132 @@ fun FileTreePane(
                 showNewObject = false
                 newObjectType = null
                 newObjectKind = null
+                newObjectGroup = null
                 newObjectName = null
                 newObjectSource = null
                 newObjectSourceName = null
                 newObjectTypeLocked = false
                 newObjectKindLocked = false
+            },
+        )
+    }
+
+    val pendingDelete = deleteTarget
+    if (pendingDelete != null) {
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("删除对象") },
+            text = {
+                Text(
+                    text = "确定删除 ${pendingDelete.type}/${pendingDelete.name}？\n" +
+                        "对象会立即从工作树移除，保存工程后对应 JSON 文件也会被删除。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    controller.deleteProjectObject(
+                        pendingDelete.type.orEmpty(),
+                        pendingDelete.name.orEmpty(),
+                    )
+                    deleteTarget = null
+                }) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTarget = null }) { Text("取消") }
+            },
+        )
+    }
+
+    val folderTarget = newFolderTarget
+    if (folderTarget != null) {
+        var folderType by remember(folderTarget) { mutableStateOf(folderTarget.type) }
+        var folderKindUnique by remember(folderTarget) {
+            mutableStateOf(folderTarget.kind == ProjectObjectKind.UNIQUE_ID)
+        }
+        AlertDialog(
+            onDismissRequest = { newFolderTarget = null },
+            title = { Text("新建文件夹") },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (folderTarget.allowTypeChange) {
+                        OutlinedTextField(
+                            value = folderType,
+                            onValueChange = { folderType = it.trim() },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall,
+                            label = { Text("对象类型") },
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Checkbox(
+                                checked = folderKindUnique,
+                                onCheckedChange = { folderKindUnique = it },
+                            )
+                            Text(
+                                text = if (folderKindUnique) {
+                                    "UniqueID 对象目录（Data/<类型>）"
+                                } else {
+                                    "ScriptableObject 目录"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "位置：${folderTarget.type}/" +
+                                (folderTarget.parent?.let { "$it/" } ?: ""),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    OutlinedTextField(
+                        value = newFolderName,
+                        onValueChange = { newFolderName = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodySmall,
+                        label = { Text("文件夹名（多级用 / 分隔）") },
+                    )
+                }
+            },
+            confirmButton = {
+                val resolvedType = if (folderTarget.allowTypeChange) {
+                    folderType.trim()
+                } else {
+                    folderTarget.type
+                }
+                val resolvedKind = if (folderTarget.allowTypeChange) {
+                    if (folderKindUnique) {
+                        ProjectObjectKind.UNIQUE_ID
+                    } else {
+                        ProjectObjectKind.SCRIPTABLE_OBJECT
+                    }
+                } else {
+                    folderTarget.kind
+                }
+                TextButton(
+                    enabled = newFolderName.isNotBlank() && resolvedType.isNotBlank(),
+                    onClick = {
+                        val parent = folderTarget.parent
+                        val path = listOfNotNull(
+                            parent?.takeIf { it.isNotBlank() },
+                            newFolderName.trim().replace('\\', '/').trim('/').ifBlank { null },
+                        ).joinToString("/")
+                        if (controller.createProjectFolder(resolvedType, path, resolvedKind)) {
+                            newFolderTarget = null
+                        }
+                    },
+                ) { Text("创建") }
+            },
+            dismissButton = {
+                TextButton(onClick = { newFolderTarget = null }) { Text("取消") }
             },
         )
     }

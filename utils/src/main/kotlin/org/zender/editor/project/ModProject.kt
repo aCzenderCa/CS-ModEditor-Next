@@ -6,6 +6,7 @@ import org.zender.editor.framework.KeyCodec
 import org.zender.editor.framework.ModFormat
 import org.zender.editor.framework.ModMetadata
 import org.zender.editor.objects.ObjectKey
+import org.zender.editor.objects.ReferenceKind
 import org.zender.editor.pack.DataPack
 import java.nio.file.Path
 
@@ -68,6 +69,28 @@ data class ModProject(
     fun findObjectKey(guid: String): ObjectKey? {
         objectByGuid(guid)?.let { return it.key }
         return basePack?.objectEntryByGuid(guid)?.key
+    }
+
+    /**
+     * 把引用本工程「非 GUID 对象」的短键规范化为 MC 的 `Namespace:Name`。
+     *
+     * - ML 引用使用裸对象名，不做处理；
+     * - 已带命名空间/多态前缀（`:`、`@`、`|`）的键保持原样；
+     * - 只有解析结果确实是本工程的无 GUID 对象时才补命名空间，
+     *   游戏本体对象、其他 Mod 与资源键不受影响。
+     */
+    fun normalizeReferenceKey(fieldType: String, rawKey: String): String {
+        val key = rawKey.trim()
+        if (key.isEmpty()) return rawKey
+        if (framework != FrameworkId.MC) return key
+        if (key.any { it == ':' || it == '@' || it == '|' }) return key
+        val resolved = ProjectReferenceResolver(this, basePack).resolve(fieldType, key)
+        if (resolved !is ReferenceCheck.Resolved) return key
+        if (resolved.origin != ReferenceOrigin.PROJECT) return key
+        val targetKey = resolved.targetKey ?: return key
+        val target = workingTree.objects[targetKey] ?: return key
+        if (target.uniqueId != null) return key
+        return keyCodec.encodeReference(target.key, ReferenceKind.PLAIN_OBJECT)
     }
 }
 

@@ -186,6 +186,60 @@ class SchemaRepository private constructor(
             "Char" to FieldKind.STRING,
         )
 
+        /**
+         * 直接用已解析的定义构造仓库，供非标准格式的数据包（例如 ModCore-ModEditor
+         * 导出的 ML 额外数据）复用同一套 Schema 推断。
+         */
+        fun fromDefinitions(
+            typeStructs: Map<String, TypeStructDefinition>,
+            templates: Map<String, JsonNode.ObjectNode> = emptyMap(),
+            docs: Map<String, TypeDocNotes> = emptyMap(),
+            docsEn: Map<String, TypeDocNotes> = emptyMap(),
+            enums: Map<String, EnumDefinition> = emptyMap(),
+            referenceTypes: Set<String> = emptySet(),
+            options: SchemaLoadOptions = SchemaLoadOptions(),
+        ): SchemaRepository = SchemaRepository(
+            typeStructs = LinkedHashMap(typeStructs),
+            templates = LinkedHashMap(templates),
+            docs = LinkedHashMap(docs),
+            docsEn = LinkedHashMap(docsEn),
+            enums = LinkedHashMap(enums),
+            referenceTypes = referenceTypes,
+            options = options,
+        )
+
+        /**
+         * 按层合并 Schema：后面的层（额外数据包）覆盖前面的同类型定义。
+         * [referenceTypes] 使用合并后的对象索引推断结果重新构建字段种类。
+         */
+        fun merge(
+            layers: List<SchemaRepository>,
+            referenceTypes: Set<String>,
+            options: SchemaLoadOptions = SchemaLoadOptions(),
+        ): SchemaRepository {
+            val typeStructs = LinkedHashMap<String, TypeStructDefinition>()
+            val templates = LinkedHashMap<String, JsonNode.ObjectNode>()
+            val docs = LinkedHashMap<String, TypeDocNotes>()
+            val docsEn = LinkedHashMap<String, TypeDocNotes>()
+            val enums = LinkedHashMap<String, EnumDefinition>()
+            layers.forEach { layer ->
+                typeStructs.putAll(layer.typeStructs)
+                templates.putAll(layer.templates)
+                docs.putAll(layer.docs)
+                docsEn.putAll(layer.docsEn)
+                enums.putAll(layer.enums)
+            }
+            return SchemaRepository(
+                typeStructs = typeStructs,
+                templates = templates,
+                docs = docs,
+                docsEn = docsEn,
+                enums = enums,
+                referenceTypes = referenceTypes,
+                options = options,
+            )
+        }
+
         val EMPTY: SchemaRepository = SchemaRepository(
             typeStructs = emptyMap(),
             templates = emptyMap(),

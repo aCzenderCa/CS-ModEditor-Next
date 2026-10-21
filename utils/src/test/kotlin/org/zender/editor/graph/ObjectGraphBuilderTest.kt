@@ -216,6 +216,67 @@ class ObjectGraphBuilderTest {
                 assertTrue(point.y in 0f..600f)
             }
         }
+        GraphLayoutMode.entries.forEach { mode ->
+            val first = GraphLayoutEngine.layout(
+                graph,
+                options.copy(mode = mode, blockByFolder = true),
+            )
+            val second = GraphLayoutEngine.layout(
+                graph,
+                options.copy(mode = mode, blockByFolder = true),
+            )
+            assertEquals(first.positions, second.positions)
+            assertEquals(first.blocks, second.blocks)
+            assertEquals(graph.nodes.map { it.key }.toSet(), first.positions.keys)
+            first.positions.values.forEach { point ->
+                assertTrue(point.x in 0f..900f)
+                assertTrue(point.y in 0f..600f)
+            }
+        }
+    }
+
+    @Test
+    fun `文件夹分块布局按子文件夹生成区块`() {
+        val nodes = listOf(
+            GraphNode(
+                ObjectKey.of("CardData", "A"),
+                "CardData",
+                "A",
+                GraphNodeOrigin.PROJECT_ADDED,
+                folder = "Item",
+            ),
+            GraphNode(
+                ObjectKey.of("CardData", "B"),
+                "CardData",
+                "B",
+                GraphNodeOrigin.PROJECT_ADDED,
+                folder = "Item",
+            ),
+            GraphNode(
+                ObjectKey.of("CardData", "C"),
+                "CardData",
+                "C",
+                GraphNodeOrigin.PROJECT_ADDED,
+                folder = "Event",
+            ),
+        )
+        val graph = ObjectGraph(nodes, emptyList(), GraphStatsCalculator.calculate(nodes, emptyList()))
+        val result = GraphLayoutEngine.layout(
+            graph,
+            GraphLayoutOptions(
+                width = 600f,
+                height = 400f,
+                padding = 20f,
+                mode = GraphLayoutMode.FORCE,
+                blockByFolder = true,
+            ),
+        )
+        assertEquals(2, result.blocks.size)
+        assertEquals(3, result.positions.size)
+        result.blocks.forEach { block ->
+            assertTrue(block.width > 0f && block.height > 0f)
+            assertTrue(block.x >= 0f && block.y >= 0f)
+        }
     }
 
     @Test

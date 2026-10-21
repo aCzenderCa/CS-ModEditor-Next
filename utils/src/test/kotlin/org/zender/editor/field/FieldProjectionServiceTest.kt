@@ -238,6 +238,43 @@ internal class FieldProjectionServiceTest {
         val tags = assertNotNull(result.rows.find { it.name == "CardTags" })
         assertFalse(tags.isDefault)
         assertTrue(tags.isModified)
+        assertTrue(
+            result.rows.none {
+                it.name.endsWith("WarpData") || it.name.endsWith("WarpType")
+            },
+        )
+    }
+
+    @Test
+    fun `图片与音频引用的 Warp 陪伴字段不再显示`() {
+        val repository = SchemaRepository.fromDefinitions(
+            typeStructs = mapOf(
+                "TestSprite" to org.zender.editor.schema.TypeStructDefinition(
+                    typeName = "TestSprite",
+                    fields = listOf(
+                        org.zender.editor.schema.FieldDefinition("CardImage", "Sprite"),
+                        org.zender.editor.schema.FieldDefinition("WhenCreatedSounds", "AudioClip"),
+                    ),
+                ),
+            ),
+            referenceTypes = setOf("Sprite", "AudioClip"),
+        )
+        val service = FieldProjectionService(repository)
+        val result = service.project(
+            JsonDocument.parseOrThrow(
+                """{
+                  "CardImage": {},
+                  "CardImageWarpData": "img_Card",
+                  "CardImageWarpType": 3,
+                  "WhenCreatedSounds": {},
+                  "WhenCreatedSoundsWarpData": "snd_Card",
+                  "WhenCreatedSoundsWarpType": 3
+                }""",
+            ),
+            "TestSprite",
+        )
+
+        assertEquals(listOf("CardImage", "WhenCreatedSounds"), result.rows.map { it.name })
     }
 
     @Test

@@ -27,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -46,7 +47,6 @@ import org.zender.app.ui.theme.ThemeMode
 import org.zender.app.workspace.OpenProjectBehavior
 import org.zender.app.workspace.WorkspaceController
 import org.zender.app.workspace.WorkspaceUiState
-import org.zender.editor.settings.FavoriteField
 import java.nio.file.Path
 
 @Composable
@@ -59,6 +59,7 @@ fun SettingsPage(
     var languageMenu by remember { mutableStateOf(false) }
     var themeMenu by remember { mutableStateOf(false) }
     var openBehaviorMenu by remember { mutableStateOf(false) }
+    var newFavoriteFolder by remember { mutableStateOf("") }
     val settings = state.settings
     val themeMode = ThemeMode.fromStorage(settings.themeMode)
     val openBehavior = OpenProjectBehavior.fromStorage(settings.openProjectBehavior)
@@ -348,24 +349,75 @@ fun SettingsPage(
             }
         }
 
-        SectionTitle("收藏字段（${state.session.favorites.size}）")
-        if (state.session.favorites.isEmpty()) {
+        val favoriteFolders = settings.effectiveFavoriteFolders()
+        SectionTitle("收藏夹（${favoriteFolders.size}）")
+        if (favoriteFolders.isEmpty()) {
             Text(
-                text = "在字段视图点击星标即可收藏。",
+                text = "还没有收藏夹。在字段视图点击星标会自动创建默认收藏夹，也可以在下方新建。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            state.session.favorites.sortedWith(compareBy({ it.type }, { it.fieldPath })).forEach { favorite ->
-                FavoriteRow(
-                    favorite = favorite,
-                    onRemove = { controller.removeFavorite(favorite) },
-                )
-            }
-            TextButton(onClick = { controller.clearFavorites() }) {
-                Text("清空全部收藏")
+            favoriteFolders.forEach { folder ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.StarBorder,
+                        contentDescription = null,
+                        modifier = Modifier.size(15.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(folder.displayName, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            text = "${folder.fields.size} 个字段",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(
+                        onClick = { controller.removeFavoriteFolder(folder.id) },
+                        modifier = Modifier.size(26.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Close,
+                            contentDescription = "删除收藏夹",
+                            modifier = Modifier.size(15.dp),
+                        )
+                    }
+                }
             }
         }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = newFavoriteFolder,
+                onValueChange = { newFavoriteFolder = it },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodySmall,
+                label = { Text("新收藏夹名称") },
+            )
+            Button(
+                enabled = newFavoriteFolder.isNotBlank(),
+                onClick = {
+                    if (controller.addFavoriteFolder(newFavoriteFolder)) {
+                        newFavoriteFolder = ""
+                    }
+                },
+            ) { Text("添加") }
+        }
+        Text(
+            text = "字段视图点击星标时可选择收藏夹；删除收藏夹会同时移除其中的收藏项。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         SectionTitle("多窗口")
         if (state.detachedWindows.isEmpty()) {
@@ -411,32 +463,3 @@ fun SettingsPage(
     }
 }
 
-@Composable
-private fun FavoriteRow(favorite: FavoriteField, onRemove: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = Icons.Outlined.StarBorder,
-            contentDescription = null,
-            modifier = Modifier.size(15.dp),
-            tint = MaterialTheme.colorScheme.primary,
-        )
-        Spacer(modifier = Modifier.width(6.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(favorite.type, style = MaterialTheme.typography.bodySmall)
-            Text(
-                text = favorite.fieldPath,
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        IconButton(onClick = onRemove, modifier = Modifier.size(26.dp)) {
-            Icon(Icons.Outlined.Close, contentDescription = "取消收藏", modifier = Modifier.size(15.dp))
-        }
-    }
-}

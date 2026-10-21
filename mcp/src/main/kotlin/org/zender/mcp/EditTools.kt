@@ -113,7 +113,10 @@ private fun setReferenceTool(workspace: McpWorkspace): McpTool = McpTool(
             "type" to stringProperty("对象类型。"),
             "name" to stringProperty("对象名。"),
             "field" to stringProperty("引用字段路径，必须以对象键结尾。"),
-            "referenceKey" to stringProperty("引用键：GUID 或对象名。"),
+            "referenceKey" to stringProperty(
+                "引用键：GUID 或对象名。MC 工程内引用非 GUID 对象时可只写对象名，" +
+                    "编辑器会规范化为 `Namespace:Name`。",
+            ),
             "warpType" to integerProperty(
                 "WarpType 数值（3..6）。",
                 default = 3,
@@ -262,7 +265,10 @@ private fun createObjectTool(workspace: McpWorkspace): McpTool = McpTool(
                 "对象种类；省略时按数据包索引推断。",
                 enumValues = listOf("unique_id", "scriptable"),
             ),
-            "group" to stringProperty("可选分组子目录（CardData 通常为 CardType）。"),
+            "group" to stringProperty(
+                "可选分组子目录，支持多级（用 / 分隔，例如 `Item/Weapons`）；" +
+                    "CardData 的第一段通常为 CardType。",
+            ),
             "uniqueId" to stringProperty("可选 GUID；省略时自动生成。"),
             "copyFromType" to stringProperty("可选：复制来源对象类型。"),
             "copyFromName" to stringProperty("可选：复制来源对象名。"),

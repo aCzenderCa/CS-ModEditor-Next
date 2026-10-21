@@ -166,19 +166,26 @@ class FileMcpWorkspace(
         val info = pack?.schemaRepository?.let {
             FieldSchemaLocator.resolve(it, type, field)
         } ?: throw McpToolException("无法解析引用字段：${field.format()}")
+        val fieldType = if (info.isReferenceList) {
+            info.schemaField.elementTypeName ?: info.typeName ?: info.schemaField.typeName
+        } else {
+            info.typeName ?: info.schemaField.typeName
+        }
+        // MC 引用本工程的非 GUID 对象时统一写成 `Namespace:Name`。
+        val key = current.normalizeReferenceKey(fieldType, referenceKey)
 
         val command = when {
             info.isReference -> SetReferenceCommand(
                 label = "设置引用 ${field.format()}",
                 fieldPath = field,
-                referenceKey = referenceKey,
+                referenceKey = key,
                 warpType = warpType,
             )
 
             info.isReferenceList -> AddReferenceToListCommand(
                 label = "添加引用 ${field.format()}",
                 listFieldPath = field,
-                referenceKey = referenceKey,
+                referenceKey = key,
                 warpType = warpType,
                 index = index,
             )

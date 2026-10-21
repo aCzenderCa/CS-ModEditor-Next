@@ -46,9 +46,13 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -98,6 +102,7 @@ fun StarMapPage(
     var includeResources by remember { mutableStateOf(false) }
     var includePatches by remember { mutableStateOf(true) }
     var layoutMode by remember { mutableStateOf(GraphLayoutMode.FORCE) }
+    var folderBlocks by remember { mutableStateOf(false) }
     var filters by remember { mutableStateOf(StarMapFilters()) }
     var layoutMenuOpen by remember { mutableStateOf(false) }
     var typeMenuOpen by remember { mutableStateOf(false) }
@@ -212,6 +217,7 @@ fun StarMapPage(
             GraphToggle("本体目标", includeBaseTargets) { includeBaseTargets = it }
             GraphToggle("资源", includeResources) { includeResources = it }
             GraphToggle("补丁", includePatches) { includePatches = it }
+            GraphToggle("文件夹分块", folderBlocks) { folderBlocks = it }
             Spacer(modifier = Modifier.weight(1f))
             Text(
                 text = "节点 ${visibleGraph.stats.nodeCount} · 边 ${visibleGraph.stats.edgeCount} · " +
@@ -227,6 +233,7 @@ fun StarMapPage(
                 graph = visibleGraph,
                 fullGraph = graph,
                 layoutMode = layoutMode,
+                folderBlocks = folderBlocks,
                 selectedKey = selectedKey,
                 hoveredKey = hoveredKey,
                 onSelect = { selectedKey = it },
@@ -275,6 +282,7 @@ private fun filterGraph(graph: ObjectGraph, filters: StarMapFilters): ObjectGrap
                 node.displayName.contains(keyword, ignoreCase = true) ||
                 node.type.contains(keyword, ignoreCase = true) ||
                 node.group?.contains(keyword, ignoreCase = true) == true ||
+                node.folder?.contains(keyword, ignoreCase = true) == true ||
                 node.key.name.contains(keyword, ignoreCase = true))
     }
     val keys = nodes.mapTo(HashSet()) { it.key }
@@ -291,6 +299,7 @@ private fun StarMapCanvas(
     graph: ObjectGraph,
     fullGraph: ObjectGraph,
     layoutMode: GraphLayoutMode,
+    folderBlocks: Boolean,
     selectedKey: ObjectKey?,
     hoveredKey: ObjectKey?,
     onSelect: (ObjectKey?) -> Unit,
@@ -339,10 +348,11 @@ private fun StarMapCanvas(
         )
     }
 
-    BoxWithConstraints(modifier = modifier.background(colors.surface)) {
+    // 星图绘制（节点、标签、拖动连线）必须裁剪在画布内，避免缩放/平移后盖住工具栏与详情面板。
+    BoxWithConstraints(modifier = modifier.clipToBounds().background(colors.surface)) {
         val widthPx = with(density) { maxWidth.toPx().takeIf { it.isFinite() && it > 20f } } ?: 800f
         val heightPx = with(density) { maxHeight.toPx().takeIf { it.isFinite() && it > 20f } } ?: 600f
-        val layout = remember(graph, layoutMode, widthPx, heightPx) {
+        val layout = remember(graph, layoutMode, folderBlocks, widthPx, heightPx) {
             GraphLayoutEngine.layout(
                 graph,
                 GraphLayoutOptions(
@@ -350,8 +360,15 @@ private fun StarMapCanvas(
                     height = heightPx,
                     padding = with(density) { 56.dp.toPx() },
                     mode = layoutMode,
+                    blockByFolder = folderBlocks,
                 ),
             )
+        }
+        val blockLabelStyle = TextStyle(fontSize = 10.sp, color = colors.onSurfaceVariant)
+        val blockLabelLayouts = remember(layout.blocks, blockLabelStyle) {
+            layout.blocks.map { block ->
+                block to textMeasurer.measure(block.label, blockLabelStyle)
+            }
         }
         var scale by remember { mutableFloatStateOf(1f) }
         var offset by remember { mutableStateOf(Offset.Zero) }
@@ -397,6 +414,7 @@ private fun StarMapCanvas(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
+                .clipToBounds()
                 .pointerInput(layout) {
                     detectTapGestures { position ->
                         currentSelect(hitTest(position)?.key)
@@ -465,6 +483,31 @@ private fun StarMapCanvas(
                     }
                 },
         ) {
+            blockLabelLayouts.forEach { (block, label) ->
+                val topLeft = Offset(block.x * scale + offset.x, block.y * scale + offset.y)
+                val size = Size(block.width * scale, block.height * scale)
+                if (size.width <= 0f || size.height <= 0f) return@forEach
+                drawRoundRect(
+                    color = colors.surfaceVariant.copy(alpha = 0.28f),
+                    topLeft = topLeft,
+                    size = size,
+                    cornerRadius = CornerRadius(10f),
+                )
+                drawRoundRect(
+                    color = colors.outlineVariant.copy(alpha = 0.75f),
+                    topLeft = topLeft,
+                    size = size,
+                    cornerRadius = CornerRadius(10f),
+                    style = Stroke(1f),
+                )
+                if (scale >= 0.35f) {
+                    drawText(
+                        textLayoutResult = label,
+                        topLeft = topLeft + Offset(8f, 5f),
+                    )
+                }
+            }
+
             graph.edges.forEach { edge ->
                 val fromPoint = layout.positions[edge.from] ?: return@forEach
                 val toPoint = layout.positions[edge.to] ?: return@forEach
@@ -697,6 +740,9 @@ private fun StarMapDetails(
                                 node.group?.takeIf { it.isNotBlank() }?.let {
                                     append(" · ").append(it)
                                 }
+                            }
+                            node.folder?.takeIf { it.isNotBlank() }?.let {
+                                append(" · ").append(it)
                             }
                             append(" · ").append(originLabel(node.origin))
                         },

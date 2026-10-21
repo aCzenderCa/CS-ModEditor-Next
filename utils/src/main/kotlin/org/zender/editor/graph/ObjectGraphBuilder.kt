@@ -10,6 +10,7 @@ import org.zender.editor.objects.ReferenceKind
 import org.zender.editor.pack.DataPack
 import org.zender.editor.project.GameSourceModify
 import org.zender.editor.project.ModProject
+import org.zender.editor.project.ProjectFolderPath
 import org.zender.editor.project.ProjectReferenceResolver
 import org.zender.editor.project.ReferenceCheck
 import org.zender.editor.project.ReferenceOrigin
@@ -133,6 +134,7 @@ class ObjectGraphBuilder(
             group: String? = null,
             displayName: String? = null,
         ) {
+            val folder = ProjectFolderPath.folderOf(relativePath, key.type)
             val existing = rawNodes[key]
             if (existing == null) {
                 rawNodes[key] = GraphNode(
@@ -141,6 +143,7 @@ class ObjectGraphBuilder(
                     displayName = displayName ?: key.name,
                     origin = origin,
                     group = group,
+                    folder = folder,
                     relativePath = relativePath,
                     isPatchTarget = isPatchTarget,
                 )
@@ -164,6 +167,7 @@ class ObjectGraphBuilder(
                     ?: displayName?.takeIf { it.isNotBlank() }
                     ?: existing.displayName,
                 group = existing.group ?: group,
+                folder = existing.folder ?: folder,
                 relativePath = existing.relativePath ?: relativePath,
                 isPatchTarget = existing.isPatchTarget || isPatchTarget,
             )

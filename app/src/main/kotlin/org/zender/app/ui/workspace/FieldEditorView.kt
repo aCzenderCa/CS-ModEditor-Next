@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.Checkbox
@@ -105,8 +107,24 @@ fun FieldEditorView(
 
     val options = state.fieldOptions
     val favoriteType = schemaType
-    val favorites = remember(state.session.favorites, favoriteType) {
-        state.session.favorites.filter { it.type == favoriteType }.toSet()
+    val favoriteFolders = state.settings.effectiveFavoriteFolders()
+    val validFolderIds = remember(favoriteFolders, options.favoriteFolderIds) {
+        options.favoriteFolderIds.intersect(favoriteFolders.mapTo(HashSet()) { it.id })
+    }
+    val folderFilterActive = validFolderIds.isNotEmpty()
+    val favoriteSource = if (folderFilterActive) {
+        favoriteFolders.filter { it.id in validFolderIds }.flatMap { it.fields }.toSet()
+    } else {
+        state.session.favorites
+    }
+    val favorites = remember(favoriteSource, favoriteType) {
+        favoriteSource.filter { it.type == favoriteType }.toSet()
+    }
+    val favoritesFilterActive = options.onlyFavorites || folderFilterActive
+    LaunchedEffect(validFolderIds, options.favoriteFolderIds) {
+        if (validFolderIds != options.favoriteFolderIds) {
+            controller.setFieldOptions(options.copy(favoriteFolderIds = validFolderIds))
+        }
     }
     val includeDefaults = if (target.isPatch) false else options.showDefaults
     val projection = remember(
@@ -131,26 +149,62 @@ fun FieldEditorView(
     }
 
     val expanded = remember(documentId) { mutableStateMapOf<String, Boolean>() }
+    // 从检查器/校验问题定位到嵌套字段时，自动展开所有祖先字段。
+    val selectedField = state.session.selection.currentField
+    LaunchedEffect(documentId, selectedField) {
+        if (selectedField?.documentId == documentId && !selectedField.path.isEmpty) {
+            val segments = selectedField.path.segments
+            for (index in 1 until segments.size) {
+                expanded[JsonPath.of(segments.take(index)).format()] = true
+            }
+        }
+    }
     // 收藏区使用独立展开状态，避免继承主树里已经展开的节点，收藏后默认保持收起。
     val favoriteExpanded = remember(documentId) { mutableStateMapOf<String, Boolean>() }
-    val favoriteRows = remember(projection.rows) {
-        projection.rows.flatMap { it.walk().toList() }.filter { it.isFavorite }
+    val searchActive = options.search.isNotBlank()
+    val favoriteRows = remember(projection.rows, options.search) {
+        projection.rows.flatMap { it.walk().toList() }
+            .filter { it.isFavorite }
+            .filter { !searchActive || matchesRow(it, options.search) }
     }
     val favoriteVisible = remember(favoriteRows, favoriteExpanded.toMap()) {
         favoriteVisibleRows(favoriteRows, favoriteExpanded)
     }
     val filtered = remember(projection.rows, options.search) {
-        filterRows(projection.rows, options.search)
+        filterTopLevelRows(projection.rows, options.search)
     }
-    val treeRows = if (!options.onlyFavorites && favoriteRows.isNotEmpty()) {
+    val treeRows = if (!favoritesFilterActive && favoriteRows.isNotEmpty()) {
         removeFavoriteRows(filtered)
     } else {
         filtered
     }
-    val rows: List<VisibleField> = if (options.onlyFavorites) {
+    // 搜索只影响“哪些顶级字段可见”，不影响顶级字段自身的展开状态。
+    val rows: List<VisibleField> = if (favoritesFilterActive) {
         favoriteVisible
     } else {
-        flattenFields(treeRows, expanded, forceExpand = options.search.isNotBlank())
+        flattenFields(treeRows, expanded)
+    }
+
+    val listState = rememberLazyListState()
+    // 从检查器定位字段后滚动到对应行；收藏区位于主列表之前，需要换算 item 下标。
+    LaunchedEffect(selectedField, rows, favoriteVisible) {
+        val target = selectedField?.takeIf { it.documentId == documentId }?.path
+            ?: return@LaunchedEffect
+        val showFavoriteSection = !favoritesFilterActive && favoriteRows.isNotEmpty()
+        var offset = 0
+        if (showFavoriteSection) {
+            val favoriteIndex = favoriteVisible.indexOfFirst { it.row.path == target }
+            if (favoriteIndex >= 0) {
+                listState.animateScrollToItem(1 + favoriteIndex)
+                return@LaunchedEffect
+            }
+            // 收藏标题 + 收藏项 + 分隔线
+            offset = 1 + favoriteVisible.size + 1
+        }
+        val index = rows.indexOfFirst { it.row.path == target }
+        if (index >= 0) {
+            listState.animateScrollToItem(offset + index)
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -164,8 +218,19 @@ fun FieldEditorView(
             expanded = expanded,
         )
         HorizontalSeparator()
-        LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp)) {
-            if (!options.onlyFavorites && favoriteRows.isNotEmpty()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp),
+        ) {
+            if (favoritesFilterActive && rows.isEmpty()) {
+                item(key = "favorites-empty") {
+                    EmptyHint(
+                        title = "当前收藏夹没有可显示的字段",
+                        hint = "在字段左侧点击星标，选择收藏夹后再查看。",
+                    )
+                }
+            }
+            if (!favoritesFilterActive && favoriteRows.isNotEmpty()) {
                 item(key = "favorites-title") { SectionTitle("收藏字段") }
                 items(favoriteVisible, key = { "fav:" + it.row.path.format() + "@" + it.depth }) { entry ->
                     FieldRowItem(
@@ -209,6 +274,9 @@ private fun FieldToolbar(
     expanded: androidx.compose.runtime.snapshots.SnapshotStateMap<String, Boolean>,
 ) {
     var search by remember { mutableStateOf(options.search) }
+    var favoriteFolderMenuOpen by remember { mutableStateOf(false) }
+    val favoriteFolders = state.settings.effectiveFavoriteFolders()
+    val selectedFolderIds = options.favoriteFolderIds
     LaunchedEffect(options.search) {
         if (search != options.search) search = options.search
     }
@@ -234,7 +302,7 @@ private fun FieldToolbar(
                         modifier = Modifier.size(16.dp),
                     )
                 },
-                placeholder = { Text("搜索字段名 / 路径 / 值", style = MaterialTheme.typography.bodySmall) },
+                placeholder = { Text("搜索顶级字段名 / 值", style = MaterialTheme.typography.bodySmall) },
             )
             TextButton(onClick = {
                 val paths = allRows.flatMap { row -> row.walk().map { it.path.format() } }.toSet()
@@ -276,6 +344,93 @@ private fun FieldToolbar(
                 modifier = Modifier.size(26.dp),
             )
             Text("只看收藏", style = MaterialTheme.typography.labelSmall)
+            Spacer(modifier = Modifier.width(4.dp))
+            Box {
+                TextButton(onClick = { favoriteFolderMenuOpen = true }) {
+                    val selectedNames = favoriteFolders
+                        .filter { it.id in selectedFolderIds }
+                        .map { it.displayName }
+                    Text(
+                        text = when {
+                            selectedNames.isEmpty() -> "收藏夹：全部"
+                            selectedNames.size <= 2 -> "收藏夹：" + selectedNames.joinToString("、")
+                            else -> "收藏夹：已选 ${selectedNames.size} 个"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                DropdownMenu(
+                    expanded = favoriteFolderMenuOpen,
+                    onDismissRequest = { favoriteFolderMenuOpen = false },
+                ) {
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = selectedFolderIds.isEmpty(),
+                                    onCheckedChange = null,
+                                )
+                                Text(
+                                    text = "全部收藏夹",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        },
+                        onClick = {
+                            controller.setFieldOptions(
+                                options.copy(favoriteFolderIds = emptySet()),
+                            )
+                            favoriteFolderMenuOpen = false
+                        },
+                    )
+                    if (favoriteFolders.isEmpty()) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = "还没有收藏夹",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            },
+                            onClick = {},
+                            enabled = false,
+                        )
+                    }
+                    favoriteFolders.forEach { folder ->
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(
+                                        checked = folder.id in selectedFolderIds,
+                                        onCheckedChange = null,
+                                    )
+                                    Column {
+                                        Text(
+                                            text = folder.displayName,
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                        Text(
+                                            text = "${folder.fields.size} 个字段",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            },
+                            onClick = {
+                                val updated = if (folder.id in selectedFolderIds) {
+                                    selectedFolderIds - folder.id
+                                } else {
+                                    selectedFolderIds + folder.id
+                                }
+                                controller.setFieldOptions(
+                                    options.copy(favoriteFolderIds = updated),
+                                )
+                                // 多选时保持菜单打开
+                            },
+                        )
+                    }
+                }
+            }
         }
         if (projectionIssues.isNotEmpty()) {
             Text(
@@ -329,79 +484,149 @@ private fun FieldRowItem(
                     reference = info?.isReference == true || info?.isReferenceList == true,
                 )
             }
-            .padding(vertical = 4.dp),
+            .padding(vertical = 2.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Row(
-                modifier = Modifier.widthIn(min = 190.dp).weight(0.44f),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Spacer(modifier = Modifier.width((entry.depth * 12).dp))
-                if (hasChildren) {
-                    IconButton(
-                        onClick = { expanded[pathText] = !isExpanded },
-                        modifier = Modifier.size(20.dp),
-                    ) {
-                        Icon(
-                            imageVector = if (isExpanded) Icons.Outlined.ExpandMore else Icons.Outlined.ChevronRight,
-                            contentDescription = null,
-                            modifier = Modifier.size(15.dp),
-                        )
+            Column(modifier = Modifier.widthIn(min = 210.dp).weight(0.5f)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Spacer(modifier = Modifier.width((entry.depth * 12).dp))
+                    if (hasChildren) {
+                        IconButton(
+                            onClick = { expanded[pathText] = !isExpanded },
+                            modifier = Modifier.size(18.dp),
+                        ) {
+                            Icon(
+                                imageVector = if (isExpanded) Icons.Outlined.ExpandMore else Icons.Outlined.ChevronRight,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                            )
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.width(18.dp))
                     }
-                } else {
-                    Spacer(modifier = Modifier.width(20.dp))
-                }
-                if (!row.isUnknown) {
-                    IconButton(
-                        onClick = { controller.toggleFavorite(rootType, pathText) },
-                        modifier = Modifier.size(22.dp),
-                    ) {
-                        Icon(
-                            imageVector = if (row.isFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
-                            contentDescription = if (row.isFavorite) "取消收藏" else "收藏字段",
-                            modifier = Modifier.size(14.dp),
-                            tint = if (row.isFavorite) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.outline
-                            },
-                        )
+                    if (!row.isUnknown) {
+                        val favoriteFolders = state.settings.effectiveFavoriteFolders()
+                        var favoriteMenuOpen by remember(pathText) { mutableStateOf(false) }
+                        Box {
+                            IconButton(
+                                onClick = {
+                                    when {
+                                        row.isFavorite -> controller.toggleFavorite(rootType, pathText)
+                                        favoriteFolders.size <= 1 ->
+                                            controller.toggleFavorite(rootType, pathText)
+                                        else -> favoriteMenuOpen = true
+                                    }
+                                },
+                                modifier = Modifier.size(20.dp),
+                            ) {
+                                Icon(
+                                    imageVector = if (row.isFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                                    contentDescription = if (row.isFavorite) "取消收藏" else "收藏字段",
+                                    modifier = Modifier.size(13.dp),
+                                    tint = if (row.isFavorite) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.outline
+                                    },
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = favoriteMenuOpen,
+                                onDismissRequest = { favoriteMenuOpen = false },
+                            ) {
+                                favoriteFolders.forEach { folder ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = folder.displayName,
+                                                style = MaterialTheme.typography.bodySmall,
+                                            )
+                                        },
+                                        onClick = {
+                                            controller.addFavoriteToFolder(
+                                                rootType,
+                                                pathText,
+                                                folder.id,
+                                            )
+                                            favoriteMenuOpen = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.width(20.dp))
                     }
-                } else {
-                    Spacer(modifier = Modifier.width(22.dp))
-                }
-                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = info?.schemaField?.displayName() ?: row.name,
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
                     )
+                    FieldFlags(row)
+                    if (row.name.startsWith("[") && row.path.last is JsonPathSegment.Index) {
+                        ListElementActions(
+                            controller = controller,
+                            state = state,
+                            documentId = documentId,
+                            row = row,
+                            editable = editable,
+                        )
+                    }
+                    val defaultValue = row.defaultValue
+                    if (editable && !localizedString && defaultValue != null && !row.isDefault) {
+                        IconButton(
+                            onClick = {
+                                controller.resetField(documentId, row.path, defaultValue)
+                            },
+                            modifier = Modifier.size(20.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.RestartAlt,
+                                contentDescription = "重置为默认值",
+                                modifier = Modifier.size(13.dp),
+                            )
+                        }
+                    }
+                }
+                val secondary = listOfNotNull(
+                    row.name.takeIf { translatedName && !displayPath },
+                    typeLabel(row, info).takeIf { it.isNotBlank() },
+                    info?.schemaField?.note()?.takeIf { it.isNotBlank() },
+                ).joinToString(" · ")
+                if (secondary.isNotEmpty()) {
                     Text(
-                        text = typeLabel(row, info),
+                        text = secondary,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 38.dp),
                     )
-                    if (displayPath || (translatedName && !row.isUnknown)) {
-                        Text(
-                            text = row.path.format(),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
+                }
+                if (displayPath) {
+                    Text(
+                        text = row.path.format(),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 38.dp),
+                    )
                 }
             }
 
-            Column(modifier = Modifier.weight(0.56f)) {
+            Column(modifier = Modifier.weight(0.5f)) {
                 when {
                     row.isReadOnly -> ReadonlyValue(row.value, "只读")
                     !editable && target.readOnly -> ReadonlyValue(row.value, "数据包只读")
@@ -475,39 +700,10 @@ private fun FieldRowItem(
 
                     else -> ReadonlyValue(row.value, info.kind.name)
                 }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    FieldFlags(row)
-                    if (row.name.startsWith("[") && row.path.last is JsonPathSegment.Index) {
-                        ListElementActions(
-                            controller = controller,
-                            state = state,
-                            documentId = documentId,
-                            row = row,
-                            editable = editable,
-                        )
-                    }
-                    val defaultValue = row.defaultValue
-                    if (editable && !localizedString && defaultValue != null && !row.isDefault) {
-                        TextButton(
-                            onClick = {
-                                controller.resetField(documentId, row.path, defaultValue)
-                            },
-                        ) {
-                            Text("重置", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-                info?.schemaField?.note()?.takeIf { it.isNotBlank() }?.let { note ->
-                    Text(
-                        text = note,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
             }
+        }
+        Box(modifier = Modifier.padding(start = (entry.depth * 12).dp)) {
+            HorizontalSeparator()
         }
     }
 }
@@ -1179,22 +1375,22 @@ private fun ListElementActions(
     IconButton(
         onClick = { controller.moveElement(documentId, parent, index, index - 1) },
         enabled = index > 0,
-        modifier = Modifier.size(22.dp),
+        modifier = Modifier.size(20.dp),
     ) {
-        Icon(Icons.Outlined.ArrowUpward, contentDescription = "上移", modifier = Modifier.size(14.dp))
+        Icon(Icons.Outlined.ArrowUpward, contentDescription = "上移", modifier = Modifier.size(13.dp))
     }
     IconButton(
         onClick = { controller.moveElement(documentId, parent, index, index + 1) },
         enabled = index < parentSize - 1,
-        modifier = Modifier.size(22.dp),
+        modifier = Modifier.size(20.dp),
     ) {
-        Icon(Icons.Outlined.ArrowDownward, contentDescription = "下移", modifier = Modifier.size(14.dp))
+        Icon(Icons.Outlined.ArrowDownward, contentDescription = "下移", modifier = Modifier.size(13.dp))
     }
     IconButton(
         onClick = { controller.removeElement(documentId, parent, index) },
-        modifier = Modifier.size(22.dp),
+        modifier = Modifier.size(20.dp),
     ) {
-        Icon(Icons.Outlined.Delete, contentDescription = "删除", modifier = Modifier.size(14.dp))
+        Icon(Icons.Outlined.Delete, contentDescription = "删除", modifier = Modifier.size(13.dp))
     }
 }
 
@@ -1275,15 +1471,18 @@ private fun favoriteVisibleRows(
     return result
 }
 
-private fun filterRows(rows: List<FieldRow>, query: String): List<FieldRow> {
+/** 只匹配顶级字段，不递归到子字段。 */
+private fun filterTopLevelRows(rows: List<FieldRow>, query: String): List<FieldRow> {
     val text = query.trim()
     if (text.isEmpty()) return rows
-    return rows.mapNotNull { row ->
-        val children = filterRows(row.children, text)
-        val match = row.name.contains(text, ignoreCase = true) ||
-            row.path.format().contains(text, ignoreCase = true) ||
-            row.typeName?.contains(text, ignoreCase = true) == true ||
-            ValueCodec.format(row.value).contains(text, ignoreCase = true)
-        if (match || children.isNotEmpty()) row.copy(children = children) else null
-    }
+    return rows.filter { matchesRow(it, text) }
+}
+
+private fun matchesRow(row: FieldRow, query: String): Boolean {
+    val text = query.trim()
+    if (text.isEmpty()) return true
+    return row.name.contains(text, ignoreCase = true) ||
+        row.path.format().contains(text, ignoreCase = true) ||
+        row.typeName?.contains(text, ignoreCase = true) == true ||
+        ValueCodec.format(row.value).contains(text, ignoreCase = true)
 }

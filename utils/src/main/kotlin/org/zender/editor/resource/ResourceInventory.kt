@@ -26,6 +26,8 @@ data class ResourceEntry(
     val extension: String,
     val sizeBytes: Long,
     val origin: EntryOrigin = EntryOrigin.BASE_PACK,
+    /** 资源所在的数据包根目录；合并主包/额外包后用于定位文件。 */
+    val sourceRoot: Path? = null,
 )
 
 class ResourceInventory(

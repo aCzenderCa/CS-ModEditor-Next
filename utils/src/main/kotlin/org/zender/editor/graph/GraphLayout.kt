@@ -23,6 +23,8 @@ data class GraphLayoutOptions(
     val padding: Float = 70f,
     val mode: GraphLayoutMode = GraphLayoutMode.FORCE,
     val iterations: Int = 180,
+    /** 按子文件夹把画布划分为区块；与 [mode] 独立，块内仍使用 [mode] 排列。 */
+    val blockByFolder: Boolean = false,
 ) {
     init {
         require(width > 0f && height > 0f) { "布局尺寸必须大于 0" }
@@ -33,10 +35,23 @@ data class GraphLayoutOptions(
 
 data class GraphPoint(val x: Float, val y: Float)
 
+/**
+ * 分块布局中的一个文件夹区块。坐标与尺寸使用画布坐标（未缩放）。
+ */
+data class GraphBlock(
+    val label: String,
+    val x: Float,
+    val y: Float,
+    val width: Float,
+    val height: Float,
+)
+
 data class GraphLayoutResult(
     val positions: Map<ObjectKey, GraphPoint>,
     val width: Float,
     val height: Float,
+    /** 开启 `blockByFolder` 时返回文件夹区块；否则为空。 */
+    val blocks: List<GraphBlock> = emptyList(),
 )
 
 /**
@@ -63,12 +78,18 @@ object GraphLayoutEngine {
             width = options.width.coerceAtLeast(safePadding * 2f + 2f),
             height = options.height.coerceAtLeast(safePadding * 2f + 2f),
         )
-        val positions = when (safeOptions.mode) {
-            GraphLayoutMode.FORCE -> forceLayout(graph, nodes, safeOptions)
-            GraphLayoutMode.GROUPED -> groupedLayout(nodes, safeOptions)
-            GraphLayoutMode.LAYERED -> layeredLayout(graph, nodes, safeOptions)
+        val blocks = mutableListOf<GraphBlock>()
+        val positions = if (safeOptions.blockByFolder) {
+            blockByFolderLayout(graph, nodes, safeOptions, blocks)
+        } else {
+            arrange(graph, nodes, safeOptions)
         }
-        return GraphLayoutResult(positions, safeOptions.width, safeOptions.height)
+        return GraphLayoutResult(
+            positions = positions,
+            width = safeOptions.width,
+            height = safeOptions.height,
+            blocks = blocks,
+        )
     }
 
     private fun forceLayout(
@@ -203,6 +224,76 @@ object GraphLayoutEngine {
                     (centerY + sin(angle) * radius)
                         .coerceIn(options.padding, options.height - options.padding),
                 )
+            }
+        }
+        return result
+    }
+
+    private fun arrange(
+        graph: ObjectGraph,
+        nodes: List<GraphNode>,
+        options: GraphLayoutOptions,
+    ): Map<ObjectKey, GraphPoint> = when (options.mode) {
+        GraphLayoutMode.FORCE -> forceLayout(graph, nodes, options)
+        GraphLayoutMode.GROUPED -> groupedLayout(nodes, options)
+        GraphLayoutMode.LAYERED -> layeredLayout(graph, nodes, options)
+    }
+
+    /**
+     * 按「类型 + 子文件夹」把画布划分为区块；块内仍按 [GraphLayoutOptions.mode] 排列。
+     * 块标题写入 [blocks]，由视图层绘制到底层。
+     */
+    private fun blockByFolderLayout(
+        graph: ObjectGraph,
+        nodes: List<GraphNode>,
+        options: GraphLayoutOptions,
+        blocks: MutableList<GraphBlock>,
+    ): Map<ObjectKey, GraphPoint> {
+        val groups = nodes
+            .groupBy { node -> node.type to (node.folder ?: "") }
+            .toSortedMap(compareBy<Pair<String, String>> { it.first }.thenBy { it.second })
+        val columns = ceil(sqrt(groups.size.toDouble())).toInt().coerceAtLeast(1)
+        val rows = ceil(groups.size.toDouble() / columns).toInt().coerceAtLeast(1)
+        val contentWidth = (options.width - options.padding * 2f).coerceAtLeast(1f)
+        val contentHeight = (options.height - options.padding * 2f).coerceAtLeast(1f)
+        val cellWidth = contentWidth / columns
+        val cellHeight = contentHeight / rows
+        val blockGap = 8f
+        val headerHeight = 18f
+        val innerPadding = 10f
+        val result = LinkedHashMap<ObjectKey, GraphPoint>()
+
+        groups.entries.forEachIndexed { groupIndex, (groupKey, groupNodes) ->
+            val column = groupIndex % columns
+            val row = groupIndex / columns
+            val left = options.padding + column * cellWidth
+            val top = options.padding + row * cellHeight
+            val width = (cellWidth - blockGap).coerceAtLeast(1f)
+            val height = (cellHeight - blockGap).coerceAtLeast(1f)
+            val label = if (groupKey.second.isBlank()) {
+                groupKey.first
+            } else {
+                "${groupKey.first} / ${groupKey.second}"
+            }
+            blocks += GraphBlock(label, left, top, width, height)
+
+            val areaLeft = left + innerPadding
+            val areaTop = top + headerHeight
+            val areaWidth = (width - innerPadding * 2f).coerceAtLeast(1f)
+            val areaHeight = (height - headerHeight - innerPadding).coerceAtLeast(1f)
+            val keys = groupNodes.mapTo(HashSet()) { it.key }
+            val subGraph = ObjectGraph(
+                nodes = groupNodes,
+                edges = graph.edges.filter { it.from in keys && it.to in keys },
+            )
+            val subOptions = options.copy(
+                width = areaWidth,
+                height = areaHeight,
+                padding = min(options.padding, min(areaWidth, areaHeight) / 4f),
+                blockByFolder = false,
+            )
+            arrange(subGraph, groupNodes, subOptions).forEach { (key, point) ->
+                result[key] = GraphPoint(point.x + areaLeft, point.y + areaTop)
             }
         }
         return result

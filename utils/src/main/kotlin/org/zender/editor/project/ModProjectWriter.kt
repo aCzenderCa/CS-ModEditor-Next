@@ -58,6 +58,38 @@ class ModProjectWriter(
             diagnostics = diagnostics,
         )
 
+        project.workingTree.folders.forEach { folder ->
+            val base = if (folder.kind == ProjectObjectKind.UNIQUE_ID) {
+                project.format.uniqueIdObjectDirectory(folder.type)
+            } else {
+                project.format.scriptableObjectDirectory(folder.type)
+            }
+            try {
+                fileStore.createDirectories(
+                    fileStore.resolveWithin(normalizedRoot, "$base/${folder.path}"),
+                )
+            } catch (e: Exception) {
+                diagnostics += error("无法创建文件夹：${e.message}", "$base/${folder.path}")
+            }
+        }
+
+        // 删除本次会话移除的对象文件；同一路径如果被重新创建则不删。
+        val livePaths = project.workingTree.objects.values.mapTo(HashSet()) { it.relativePath }
+        project.workingTree.deletedPaths
+            .filter { it.isNotBlank() && it !in livePaths }
+            .forEach { relativePath ->
+                try {
+                    val target = fileStore.resolveWithin(normalizedRoot, relativePath)
+                    if (fileStore.exists(target)) fileStore.delete(target)
+                } catch (e: Exception) {
+                    diagnostics += Diagnostic(
+                        DiagnosticSeverity.WARNING,
+                        "无法删除对象文件：${e.message}",
+                        relativePath,
+                    )
+                }
+            }
+
         project.workingTree.objects.values.forEach { entry ->
             if (entry.kind == ProjectObjectKind.UNIQUE_ID && entry.uniqueId == null) {
                 diagnostics += Diagnostic(

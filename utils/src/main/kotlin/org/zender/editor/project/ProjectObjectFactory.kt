@@ -73,9 +73,10 @@ class ProjectObjectFactory(
         if (requestedName != null && !isFileSafeName(requestedName)) {
             return failure("对象名包含文件名非法字符：$requestedName")
         }
-        val group = request.group?.trim()?.takeIf { it.isNotEmpty() }
-        if (group != null && !isFileSafeName(group)) {
-            return failure("分组目录包含非法字符：$group")
+        val groupPath = try {
+            ProjectFolderPath.normalize(request.group)
+        } catch (e: IllegalArgumentException) {
+            return failure(e.message ?: "分组目录不合法")
         }
 
         val name = resolveName(project, type, requestedName)
@@ -113,8 +114,10 @@ class ProjectObjectFactory(
             source = request.sourceDocument,
         )
         // CardData 在 Objects/CardData/<CardType>/ 下按 CardType 分目录；文件布局与字段必须一致。
+        // group 支持多级路径（`Item/Weapons`）：第一段是 CardType 时同步字段，其余层级只作为目录。
         val layoutGroup = if (type == ObjectIndex.CARD_DATA_TYPE) {
-            val cardType = resolveCardType(root, schema, group)
+            val requestedCardType = groupPath?.substringBefore('/')?.takeIf { it.isNotBlank() }
+            val cardType = resolveCardType(root, schema, requestedCardType)
             val cardTypeValue = cardType?.second
             if (cardTypeValue != null) {
                 val objectRoot = root.root as? JsonNode.ObjectNode
@@ -122,9 +125,9 @@ class ProjectObjectFactory(
                     root = JsonDocument(replaceMember(objectRoot, "CardType", cardTypeValue))
                 }
             }
-            cardType?.first
+            groupPath ?: cardType?.first
         } else {
-            group
+            groupPath
         }
         val directory = if (kind == ProjectObjectKind.UNIQUE_ID) {
             project.format.uniqueIdObjectDirectory(type)

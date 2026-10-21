@@ -6,8 +6,10 @@ import org.zender.editor.document.JsonDocument
 import org.zender.editor.document.JsonPath
 import org.zender.editor.document.RawJsonDocument
 import org.zender.editor.edit.WarpType
+import org.zender.editor.framework.FrameworkId
 import org.zender.editor.objects.ObjectKey
 import org.zender.editor.pack.DataPack
+import org.zender.editor.pack.PackInfo
 import org.zender.editor.project.ProjectObjectKind
 import org.zender.editor.project.ValidationIssue
 import org.zender.editor.session.EditorSessionState
@@ -19,11 +21,31 @@ import org.zender.editor.window.WindowId
 /** 主工作区页面。文件 Tab 与这些页面互斥显示。 */
 enum class WorkspaceScreen {
     FILES,
+    METADATA,
+    GAMES,
     STAR_MAP,
     LOCALIZATION,
     RESOURCES,
     EXPORT,
+    HELP,
     SETTINGS,
+}
+
+/**
+ * 数据包目录的静态分析结果（不加载整个数据包）。
+ */
+data class PackDirectoryAnalysis(
+    val path: String = "",
+    /** `MC`（标准 PackInfo 格式）、`ML`（ModCore-ModEditor 模板格式）或空。 */
+    val format: String = "",
+    val framework: FrameworkId? = null,
+    val info: PackInfo? = null,
+    val typeCount: Int = 0,
+    /** `PackInfo.Name` 为 CSTI / CSFF 时给出，可作为主包直接使用。 */
+    val mainPackKind: String? = null,
+    val error: String? = null,
+) {
+    val isValid: Boolean get() = error == null
 }
 
 /** 引用选择器窗口类型。 */
@@ -51,6 +73,8 @@ data class FieldViewOptions(
     val showDefaults: Boolean = true,
     val showUnknown: Boolean = true,
     val onlyFavorites: Boolean = false,
+    /** 只显示这些收藏夹中的字段；为空时不过滤收藏夹。 */
+    val favoriteFolderIds: Set<String> = emptySet(),
     val search: String = "",
 )
 

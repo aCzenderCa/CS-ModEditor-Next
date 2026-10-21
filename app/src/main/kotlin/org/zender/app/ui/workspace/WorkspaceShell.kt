@@ -83,6 +83,7 @@ fun WorkspaceShell(
     var pendingProject by remember { mutableStateOf<Path?>(null) }
     var projectOpenChoice by remember { mutableStateOf<Path?>(null) }
     var dontAskAgain by remember { mutableStateOf(false) }
+    var showNewProject by remember { mutableStateOf(false) }
     val themeMode = ThemeMode.fromStorage(state.settings.themeMode)
     val darkTheme = ThemeMode.resolvedDark(themeMode, isSystemInDarkTheme())
     var treeWidth by remember {
@@ -153,6 +154,7 @@ fun WorkspaceShell(
             state = state,
             onChoosePack = ::choosePack,
             onOpenProject = ::chooseProject,
+            onNewProject = { showNewProject = true },
             onOpenRecentProject = ::openRecentProject,
             onProjectMenuOpen = controller::reloadSettings,
             openProjects = openProjects,
@@ -210,6 +212,7 @@ fun WorkspaceShell(
                                     controller = controller,
                                     state = state,
                                     onOpenProject = ::chooseProject,
+                                    onNewProject = { showNewProject = true },
                                     onChoosePack = ::choosePack,
                                 )
                             }
@@ -233,10 +236,13 @@ fun WorkspaceShell(
                 }
             }
 
+            WorkspaceScreen.METADATA -> MetadataPage(controller, state)
+            WorkspaceScreen.GAMES -> GamesPage(controller, state, filePicker)
             WorkspaceScreen.STAR_MAP -> StarMapPage(controller, state)
             WorkspaceScreen.LOCALIZATION -> LocalizationPage(controller, state)
             WorkspaceScreen.RESOURCES -> ResourcePage(controller, state, filePicker)
             WorkspaceScreen.EXPORT -> ExportPage(controller, state, filePicker)
+            WorkspaceScreen.HELP -> HelpPage()
             WorkspaceScreen.SETTINGS -> SettingsPage(controller, state, filePicker)
         }
         HorizontalSeparator()
@@ -346,6 +352,29 @@ fun WorkspaceShell(
             },
         )
     }
+
+    if (showNewProject) {
+        NewProjectDialog(
+            filePicker = filePicker,
+            onDismiss = { showNewProject = false },
+            onCreate = { form ->
+                scope.launch {
+                    val created = controller.createProject(
+                        root = form.root,
+                        framework = form.framework,
+                        name = form.name,
+                        namespace = form.namespace,
+                        author = form.author,
+                        version = form.version,
+                    )
+                    if (created) {
+                        showNewProject = false
+                        requestProjectOpen(form.root)
+                    }
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -353,6 +382,7 @@ private fun WorkspaceTopBar(
     state: WorkspaceUiState,
     onChoosePack: () -> Unit,
     onOpenProject: () -> Unit,
+    onNewProject: () -> Unit,
     onOpenRecentProject: (String) -> Unit,
     onProjectMenuOpen: () -> Unit,
     openProjects: List<OpenProjectInfo>,
@@ -481,6 +511,13 @@ private fun WorkspaceTopBar(
                             )
                         }
                     }
+                    DropdownMenuItem(
+                        text = { Text("新建工程…", style = MaterialTheme.typography.bodySmall) },
+                        onClick = {
+                            projectMenuOpen = false
+                            onNewProject()
+                        },
+                    )
                     DropdownMenuItem(
                         text = { Text("打开其他工程…", style = MaterialTheme.typography.bodySmall) },
                         onClick = {
@@ -625,11 +662,14 @@ private fun ResizableSplitter(
 
 private fun screenTabs(): List<Pair<WorkspaceScreen, String>> = listOf(
     WorkspaceScreen.FILES to "文件",
+    WorkspaceScreen.METADATA to "元数据",
+    WorkspaceScreen.GAMES to "游戏",
     WorkspaceScreen.STAR_MAP to "星图",
     WorkspaceScreen.LOCALIZATION to "本地化",
     WorkspaceScreen.RESOURCES to "资源",
     WorkspaceScreen.EXPORT to "导出",
     WorkspaceScreen.SETTINGS to "设置",
+    WorkspaceScreen.HELP to "帮助",
 )
 
 @Composable

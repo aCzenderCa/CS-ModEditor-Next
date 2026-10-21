@@ -78,13 +78,14 @@ class MlProjectReader(
 
     private fun buildTree(support: ProjectReadSupport, basePack: DataPack?): WorkingTree {
         val objects = LinkedHashMap<ObjectKey, ProjectObject>()
-        val objectReader = ProjectObjectReader(support, objects)
+        val folders = LinkedHashSet<ProjectFolder>()
+        val objectReader = ProjectObjectReader(support, objects, folders)
 
         // 1. 根目录类型目录：UniqueIDScriptable。
         for (directory in support.directories(support.projectRoot)) {
             val type = directory.fileName.toString()
             if (MlFormat.isReservedRootDirectory(type)) continue
-            if (support.jsonFiles(directory, includeJsonnet = true).isEmpty()) continue
+            if (!support.hasObjectContent(directory, includeJsonnet = true)) continue
             if (!acceptUniqueIdType(type, basePack, support)) continue
             objectReader.readUniqueIdType(type, directory, includeJsonnet = true)
         }
@@ -113,6 +114,7 @@ class MlProjectReader(
             gameSourceModifies = gameSourceModifies.toMap(),
             resources = resources.toMap(),
             localization = localizationResult.localization,
+            folders = folders.toSet(),
         )
     }
 

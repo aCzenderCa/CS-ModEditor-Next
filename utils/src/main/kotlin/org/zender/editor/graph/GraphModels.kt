@@ -27,6 +27,8 @@ data class GraphNode(
     val displayName: String,
     val origin: GraphNodeOrigin,
     val group: String? = null,
+    /** 类型目录下的子文件夹路径（如 `Item/Weapons`），用于按文件夹分块布局。 */
+    val folder: String? = null,
     /** 工程内相对路径或数据包内相对路径，供打开/预览。 */
     val relativePath: String? = null,
     /** 该节点是补丁目标；即使关闭“显示本体目标”也应保留。 */
