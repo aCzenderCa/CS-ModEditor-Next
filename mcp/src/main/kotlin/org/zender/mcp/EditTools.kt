@@ -12,9 +12,13 @@ import org.zender.editor.document.JsonPath
 import org.zender.editor.document.readPath
 import org.zender.editor.edit.WarpFields
 import org.zender.editor.edit.WarpType
+import org.zender.editor.framework.FrameworkId
 import org.zender.editor.field.FieldEditorInfo
 import org.zender.editor.field.FieldSchemaLocator
 import org.zender.editor.project.NewObjectRequest
+import org.zender.editor.project.NewPatchRequest
+import org.zender.editor.project.NewProjectRequest
+import org.zender.editor.project.PatchKind
 import org.zender.editor.project.ProjectObjectKind
 import org.zender.editor.resource.ResourceKind
 import org.zender.editor.schema.FieldKind
@@ -26,15 +30,63 @@ import org.zender.editor.schema.FieldKind
  * 因此编辑器内嵌模式下所有改动都会进入正在运行的编辑会话。
  */
 internal fun editingTools(workspace: McpWorkspace): List<McpTool> = listOf(
+    createProjectTool(workspace),
     setFieldTool(workspace),
     setReferenceTool(workspace),
     clearReferenceTool(workspace),
     removeReferenceTool(workspace),
     createObjectTool(workspace),
+    createPatchTool(workspace),
     saveProjectTool(workspace),
     setLocalizationTool(workspace),
     importResourceTool(workspace),
 )
+
+private fun createProjectTool(workspace: McpWorkspace): McpTool = McpTool(
+    name = "create_project",
+    title = "新建 Mod 工程",
+    description = "在空目录（或尚不存在的目录）创建 ML/MC Mod 工程，只写入元数据文件，" +
+        "随后自动打开为当前工程。目录非空时会失败；已有工程请用 open_project。",
+    inputSchema = objectSchema(
+        properties = mapOf(
+            "path" to stringProperty("工程根目录；相对路径按 MCP 进程工作目录解析。"),
+            "framework" to stringProperty(
+                "工程框架：ML（ModLoader）或 MC（ModCore）。",
+                enumValues = listOf("ML", "MC"),
+            ),
+            "name" to stringProperty("Mod 名称；ML 同时作为 ModInfo.Name。"),
+            "namespace" to stringProperty("仅 MC：ModMeta.Namespace；省略时使用 name。"),
+            "author" to stringProperty("可选：作者。"),
+            "version" to stringProperty("可选：Mod 版本，例如 1.0.0。"),
+        ),
+        required = listOf("path", "framework", "name"),
+    ),
+) { args ->
+    val framework = when (args.requireString("framework").trim().uppercase()) {
+        "ML" -> FrameworkId.ML
+        "MC" -> FrameworkId.MC
+        else -> throw McpToolException("framework 只能是 ML 或 MC")
+    }
+    val project = workspace.createProject(
+        NewProjectRequest(
+            root = args.requirePath("path"),
+            framework = framework,
+            name = args.requireString("name"),
+            namespace = args.string("namespace"),
+            author = args.string("author").orEmpty(),
+            version = args.string("version").orEmpty(),
+        ),
+    )
+    buildJsonObject {
+        put("created", true)
+        put("root", project.root?.toString().orEmpty())
+        put("framework", project.framework.name)
+        put("namespace", project.namespace)
+        put("name", project.metadata.displayName())
+        put("metadataFile", project.format.metadataFileName)
+        put("diagnostics", workspace.diagnostics.toDiagnosticsJson())
+    }
+}
 
 private fun setFieldTool(workspace: McpWorkspace): McpTool = McpTool(
     name = "set_field",
@@ -323,6 +375,53 @@ private fun createObjectTool(workspace: McpWorkspace): McpTool = McpTool(
         put("name", created.name)
         created.uniqueId?.let { put("uniqueId", it) }
         put("path", created.relativePath)
+        put("saved", saved)
+        put("diagnostics", workspace.diagnostics.toDiagnosticsJson())
+    }
+}
+
+private fun createPatchTool(workspace: McpWorkspace): McpTool = McpTool(
+    name = "create_patch",
+    title = "新建补丁",
+    description = "为工程或数据包中的对象新建补丁：GameSourceModify 需要目标带 UniqueID；" +
+        "DataObjectModify 仅 MC，目标必须是无 GUID 的 ScriptableObject。" +
+        "补丁会立即进入编辑器的工作树，save=true 时同时写回工程目录。",
+    inputSchema = objectSchema(
+        properties = mapOf(
+            "kind" to stringProperty(
+                "补丁类型：game_source_modify 或 data_object_modify。",
+                enumValues = listOf("game_source_modify", "data_object_modify"),
+            ),
+            "type" to stringProperty("目标对象类型。"),
+            "name" to stringProperty("目标对象名。"),
+            "save" to booleanProperty("是否立即写回工程目录。", default = false),
+        ),
+        required = listOf("kind", "type", "name"),
+    ),
+) { args ->
+    val kind = when (args.requireString("kind").trim().lowercase()) {
+        "game_source_modify", "gsm" -> PatchKind.GAME_SOURCE_MODIFY
+        "data_object_modify", "dom" -> PatchKind.DATA_OBJECT_MODIFY
+        else -> throw McpToolException("kind 只能是 game_source_modify / data_object_modify")
+    }
+    val outcome = workspace.createPatch(
+        NewPatchRequest(
+            kind = kind,
+            type = args.requireString("type"),
+            name = args.requireString("name"),
+        ),
+    )
+    val saved = if (args.boolean("save", false)) {
+        workspace.saveProject(null)
+        true
+    } else {
+        false
+    }
+    buildJsonObject {
+        put("created", true)
+        put("kind", outcome.kind.name.lowercase())
+        put("target", outcome.target)
+        put("path", outcome.relativePath)
         put("saved", saved)
         put("diagnostics", workspace.diagnostics.toDiagnosticsJson())
     }

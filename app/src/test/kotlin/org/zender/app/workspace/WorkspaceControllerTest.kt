@@ -21,6 +21,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WorkspaceControllerTest {
@@ -63,6 +64,86 @@ class WorkspaceControllerTest {
             val text = Files.readString(fixture.projectRoot.resolve("CardData/ProjectCard.json"))
             assertTrue(text.contains("\"ObjectWeight\": 0.9"), text)
         }
+    }
+
+    @Test
+    fun `新建 GameSourceModify 补丁并打开`() = withFixture { fixture ->
+        val controller = openedController(fixture)
+        assertTrue(controller.createGameSourceModifyPatch("CardData", "ProjectCard"))
+        val target = controller.state.value.activeTarget
+        assertTrue(target is DocumentTarget.GameSourceModifyTarget)
+        assertEquals(
+            WorkspaceTestFixture.PROJECT_CARD_GUID,
+            (target as DocumentTarget.GameSourceModifyTarget).targetGuid,
+        )
+        assertTrue(controller.saveProject())
+        assertTrue(
+            Files.isRegularFile(
+                fixture.projectRoot.resolve(
+                    "GameSourceModify/${WorkspaceTestFixture.PROJECT_CARD_GUID}.json",
+                ),
+            ),
+        )
+
+        // ML 不支持 DataObjectModify。
+        assertFalse(controller.createDataObjectModifyPatch("CardTag", "tag_Test"))
+    }
+
+    @Test
+    fun `空补丁可以添加 Warp 字段并保存`() = withFixture { fixture ->
+        val controller = openedController(fixture)
+        assertTrue(controller.createGameSourceModifyPatch("CardData", "ProjectCard"))
+        val id = WorkspaceController.gsmDocumentId(WorkspaceTestFixture.PROJECT_CARD_GUID)
+
+        val candidates = controller.patchFieldCandidates(id)
+        assertTrue(candidates.any { it.name == "CardTags" }, candidates.joinToString())
+        assertTrue(candidates.none { it.name == "ObjectWeight" }, candidates.joinToString())
+        assertFalse(controller.addPatchField(id, "ObjectWeight"))
+
+        assertTrue(controller.addPatchField(id, "CardTags"))
+        val document = assertNotNull(controller.state.value.session.documents[id]).document
+        // 游戏加载器只读取 Warp 配对；字段本体不写入补丁。
+        assertNull(document.root.readPath(JsonPath.parse("CardTags")))
+        assertTrue(
+            document.root.readPath(JsonPath.parse("CardTagsWarpData")) is JsonNode.ArrayNode,
+        )
+        assertEquals(
+            "6",
+            (document.root.readPath(JsonPath.parse("CardTagsWarpType")) as JsonNode.NumberNode).raw,
+        )
+        assertEquals(
+            JsonPath.parse("CardTags"),
+            controller.state.value.session.selection.currentField?.path,
+        )
+        // 已写入 Warp 配对的字段不再出现在候选列表。
+        assertTrue(controller.patchFieldCandidates(id).none { it.name == "CardTags" })
+
+        assertTrue(controller.saveProject())
+        val text = Files.readString(
+            fixture.projectRoot.resolve(
+                "GameSourceModify/${WorkspaceTestFixture.PROJECT_CARD_GUID}.json",
+            ),
+        )
+        assertTrue(text.contains("\"CardTagsWarpData\""), text)
+        assertTrue(text.contains("\"CardTagsWarpType\""), text)
+        assertFalse(text.contains("\"CardTags\":"), text)
+    }
+
+    @Test
+    fun `GameSourceModify 补丁可以删除并在保存后移除文件`() = withFixture { fixture ->
+        val controller = openedController(fixture)
+        assertTrue(controller.createGameSourceModifyPatch("CardData", "ProjectCard"))
+        val guid = WorkspaceTestFixture.PROJECT_CARD_GUID
+        val path = fixture.projectRoot.resolve("GameSourceModify/$guid.json")
+        assertTrue(controller.saveProject())
+        assertTrue(Files.isRegularFile(path))
+
+        assertTrue(controller.deleteGameSourceModify(guid))
+        assertNull(controller.state.value.project?.workingTree?.gameSourceModify(guid))
+        assertNull(controller.state.value.session.documents[WorkspaceController.gsmDocumentId(guid)])
+
+        assertTrue(controller.saveProject())
+        assertFalse(Files.exists(path))
     }
 
     @Test

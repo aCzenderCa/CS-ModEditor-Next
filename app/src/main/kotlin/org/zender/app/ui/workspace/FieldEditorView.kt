@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -30,11 +31,15 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.StarBorder
+import androidx.compose.material.icons.outlined.Stop
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,6 +49,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -53,8 +59,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.zender.app.workspace.DocumentTarget
 import org.zender.app.workspace.FieldViewOptions
+import org.zender.app.workspace.PatchFieldCandidate
 import org.zender.app.workspace.WorkspaceController
 import org.zender.app.workspace.WorkspaceUiState
 import org.zender.editor.document.DocumentId
@@ -74,6 +83,7 @@ import org.zender.editor.document.readPath
 import org.zender.editor.edit.ValueCodec
 import org.zender.editor.edit.WarpFields
 import org.zender.editor.edit.WarpType
+import org.zender.editor.field.DefaultValueFilter
 import org.zender.editor.field.FieldEditorInfo
 import org.zender.editor.field.FieldRow
 import org.zender.editor.field.FieldProjectionOptions
@@ -84,6 +94,13 @@ import org.zender.editor.selection.FieldRef
 private data class VisibleField(val row: FieldRow, val depth: Int)
 
 private const val LOCALIZED_STRING_TYPE = "LocalizedString"
+private const val DURABILITY_STAT_TYPE = "DurabilityStat"
+private const val AUDIO_CLIP_TYPE = "AudioClip"
+private val IMAGE_REFERENCE_TYPES = setOf("Sprite", "Texture", "Texture2D")
+
+private fun isImageFieldType(typeName: String?): Boolean = typeName in IMAGE_REFERENCE_TYPES
+
+private fun isAudioFieldType(typeName: String?): Boolean = typeName == AUDIO_CLIP_TYPE
 
 @Composable
 fun FieldEditorView(
@@ -126,12 +143,14 @@ fun FieldEditorView(
             controller.setFieldOptions(options.copy(favoriteFolderIds = validFolderIds))
         }
     }
-    val includeDefaults = if (target.isPatch) false else options.showDefaults
+    // 补丁文档固定过滤所有层级的默认值；普通文档由三态开关控制。
+    val defaultFilter = if (target.isPatch) DefaultValueFilter.ALL else options.defaultFilter
     val projection = remember(
         sessionDocument.document,
         pack,
         schemaType,
-        includeDefaults,
+        defaultFilter,
+        target.isPatch,
         options.showUnknown,
         favorites,
     ) {
@@ -139,7 +158,8 @@ fun FieldEditorView(
             document = sessionDocument.document,
             typeName = schemaType,
             options = FieldProjectionOptions(
-                includeDefaults = includeDefaults,
+                defaultFilter = defaultFilter,
+                patchMode = target.isPatch,
                 includeUnknown = options.showUnknown,
                 includeReadOnly = true,
                 favorites = favorites,
@@ -211,6 +231,7 @@ fun FieldEditorView(
         FieldToolbar(
             controller = controller,
             state = state,
+            documentId = documentId,
             options = options,
             target = target,
             projectionIssues = projection.issues.map { it.message },
@@ -222,6 +243,14 @@ fun FieldEditorView(
             state = listState,
             modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp),
         ) {
+            if (target.isPatch && rows.isEmpty() && favoriteRows.isEmpty()) {
+                item(key = "patch-empty") {
+                    EmptyHint(
+                        title = "补丁为空",
+                        hint = "点击工具栏的「添加 Warp 字段」，选择要引用的 Schema 字段。",
+                    )
+                }
+            }
             if (favoritesFilterActive && rows.isEmpty()) {
                 item(key = "favorites-empty") {
                     EmptyHint(
@@ -267,6 +296,7 @@ fun FieldEditorView(
 private fun FieldToolbar(
     controller: WorkspaceController,
     state: WorkspaceUiState,
+    documentId: DocumentId,
     options: FieldViewOptions,
     target: DocumentTarget,
     projectionIssues: List<String>,
@@ -275,6 +305,7 @@ private fun FieldToolbar(
 ) {
     var search by remember { mutableStateOf(options.search) }
     var favoriteFolderMenuOpen by remember { mutableStateOf(false) }
+    var addFieldOpen by remember { mutableStateOf(false) }
     val favoriteFolders = state.settings.effectiveFavoriteFolders()
     val selectedFolderIds = options.favoriteFolderIds
     LaunchedEffect(options.search) {
@@ -314,6 +345,11 @@ private fun FieldToolbar(
             }) {
                 Text(if (expanded.values.any { it }) "折叠" else "展开")
             }
+            if (target.isPatch && !target.readOnly) {
+                TextButton(onClick = { addFieldOpen = true }) {
+                    Text("添加 Warp 字段")
+                }
+            }
         }
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -321,12 +357,31 @@ private fun FieldToolbar(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             if (!target.isPatch) {
-                Checkbox(
-                    checked = options.showDefaults,
-                    onCheckedChange = { controller.setFieldOptions(options.copy(showDefaults = it)) },
+                val defaultState = when (options.defaultFilter) {
+                    DefaultValueFilter.NONE -> ToggleableState.On
+                    DefaultValueFilter.TOP_LEVEL -> ToggleableState.Indeterminate
+                    DefaultValueFilter.ALL -> ToggleableState.Off
+                }
+                TriStateCheckbox(
+                    state = defaultState,
+                    onClick = {
+                        val next = when (options.defaultFilter) {
+                            DefaultValueFilter.NONE -> DefaultValueFilter.TOP_LEVEL
+                            DefaultValueFilter.TOP_LEVEL -> DefaultValueFilter.ALL
+                            DefaultValueFilter.ALL -> DefaultValueFilter.NONE
+                        }
+                        controller.setFieldOptions(options.copy(defaultFilter = next))
+                    },
                     modifier = Modifier.size(26.dp),
                 )
-                Text("默认值", style = MaterialTheme.typography.labelSmall)
+                Text(
+                    text = when (options.defaultFilter) {
+                        DefaultValueFilter.NONE -> "默认值：显示"
+                        DefaultValueFilter.TOP_LEVEL -> "默认值：仅顶级"
+                        DefaultValueFilter.ALL -> "默认值：全过滤"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                )
             } else {
                 StatusChip("补丁：隐藏模板字段")
             }
@@ -441,8 +496,99 @@ private fun FieldToolbar(
             )
         }
     }
+    if (addFieldOpen) {
+        AddPatchFieldDialog(
+            candidates = controller.patchFieldCandidates(documentId),
+            onSelect = { name ->
+                controller.addPatchField(documentId, name)
+                addFieldOpen = false
+            },
+            onDismiss = { addFieldOpen = false },
+        )
+    }
 }
 
+
+@Composable
+private fun AddPatchFieldDialog(
+    candidates: List<PatchFieldCandidate>,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var keyword by remember { mutableStateOf("") }
+    val filtered = remember(candidates, keyword) {
+        val text = keyword.trim()
+        if (text.isEmpty()) {
+            candidates
+        } else {
+            candidates.filter {
+                it.name.contains(text, ignoreCase = true) ||
+                    it.displayName.contains(text, ignoreCase = true)
+            }
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("添加 Warp 字段") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(
+                    value = keyword,
+                    onValueChange = { keyword = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    label = { Text("搜索字段") },
+                )
+                if (filtered.isEmpty()) {
+                    Text(
+                        text = "没有可添加的字段；可能已全部添加。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxWidth().height(320.dp)) {
+                        items(filtered, key = { it.name }) { candidate ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onSelect(candidate.name) }
+                                    .padding(vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = candidate.displayName,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = candidate.name,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                Text(
+                                    text = candidate.typeLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        },
+    )
+}
 
 @Composable
 private fun FieldRowItem(
@@ -462,7 +608,10 @@ private fun FieldRowItem(
     val document = state.session.documents[documentId]?.document
     val localizedString = info?.kind == FieldKind.OBJECT &&
         (info.typeName == LOCALIZED_STRING_TYPE || info.schemaField.typeName == LOCALIZED_STRING_TYPE)
-    val hasChildren = row.children.isNotEmpty() && !localizedString
+    val durabilityStat = row.typeName == DURABILITY_STAT_TYPE
+    val durabilityActive = !durabilityStat || durabilityStatActive(row.value)
+    val hasChildren = row.children.isNotEmpty() && !localizedString &&
+        (!durabilityStat || durabilityActive)
     val isExpanded = expanded[row.path.format()] ?: false
     val editable = !target.readOnly && !row.isReadOnly
     val selected = state.session.selection.currentField == FieldRef(documentId, row.path)
@@ -659,6 +808,26 @@ private fun FieldRowItem(
                         editable = editable,
                     )
 
+                    durabilityStat -> DurabilityStatValue(
+                        active = durabilityActive,
+                        childCount = row.childCount,
+                        editable = editable,
+                        onToggle = { active ->
+                            val changed = controller.setFieldNode(
+                                documentId,
+                                row.path.child("Active"),
+                                JsonNode.BooleanNode.of(active),
+                            )
+                            if (changed) {
+                                if (active) {
+                                    expanded[pathText] = true
+                                } else {
+                                    expanded.remove(pathText)
+                                }
+                            }
+                        },
+                    )
+
                     info.kind == FieldKind.OBJECT -> ObjectValue(
                         row = row,
                         nameText = nameLikeFieldText(row, state),
@@ -769,6 +938,51 @@ private fun nameLikeFieldText(row: FieldRow, state: WorkspaceUiState): String? {
     }
     return null
 }
+
+/**
+ * `DurabilityStat` 特殊展示：把 `Active` 直接暴露为开关按钮。
+ * 未激活时运行时视作默认值，字段不可展开，避免误编辑一大组被忽略的数据。
+ */
+@Composable
+private fun DurabilityStatValue(
+    active: Boolean,
+    childCount: Int,
+    editable: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        FilterChip(
+            selected = active,
+            enabled = editable,
+            onClick = { onToggle(!active) },
+            label = {
+                Text(
+                    text = if (active) "已激活" else "激活",
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            },
+        )
+        Text(
+            text = if (active) "对象 · $childCount 个字段" else "未激活，视为默认值",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private fun durabilityStatActive(value: JsonNode?): Boolean {
+    val node = value as? JsonNode.ObjectNode ?: return false
+    return (node.get("Active") as? JsonNode.BooleanNode)?.value == true
+}
+
+/** 字段是否可展开：`DurabilityStat` 只有 Active=true 时才允许展开。 */
+private fun isRowExpandable(row: FieldRow): Boolean =
+    row.children.isNotEmpty() &&
+        row.typeName != LOCALIZED_STRING_TYPE &&
+        (row.typeName != DURABILITY_STAT_TYPE || durabilityStatActive(row.value))
 
 @Composable
 private fun ObjectValue(row: FieldRow, nameText: String?) {
@@ -1151,11 +1365,30 @@ private fun ReferenceScalarEditor(
     ) {
         controller.referenceDisplay(documentId, row.path, fieldType)
     }
+    val isImage = isImageFieldType(fieldType)
+    val isAudio = isAudioFieldType(fieldType)
+    val resourcePath = remember(
+        display.key,
+        fieldType,
+        state.project,
+        state.pack,
+    ) {
+        if (isImage || isAudio) controller.referenceResourceFile(fieldType, display.key) else null
+    }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            if (isImage && resourcePath != null) {
+                FileImage(
+                    path = resourcePath,
+                    modifier = Modifier
+                        .size(30.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                    contentDescription = display.key,
+                )
+            }
             Text(
                 text = display.key ?: "（未设置）",
                 style = MaterialTheme.typography.bodySmall,
@@ -1170,7 +1403,32 @@ private fun ReferenceScalarEditor(
                 error = !display.resolved && display.key != null && !display.warning,
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (isAudio && resourcePath != null) {
+                var audioError by remember(resourcePath) { mutableStateOf(false) }
+                val playing = AudioPreview.playingPath == resourcePath
+                TextButton(onClick = {
+                    audioError = !AudioPreview.toggle(resourcePath)
+                }) {
+                    Icon(
+                        imageVector = if (playing) Icons.Outlined.Stop else Icons.Outlined.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Text(if (playing) "停止" else "试听", style = MaterialTheme.typography.labelSmall)
+                }
+                if (audioError) {
+                    Text(
+                        text = "无法试听",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
             if (state.settings.showWarpType) {
                 Text(
                     text = "WarpType=${display.warpType?.let { "${it.value} ${it.name}" } ?: "缺失"}",
@@ -1295,6 +1553,15 @@ private fun ReferenceListEditor(
             val display = remember(state.project, state.pack, key, elementType) {
                 controller.describeReferenceKey(elementType, key)
             }
+            val isImage = isImageFieldType(elementType)
+            val isAudio = isAudioFieldType(elementType)
+            val resourcePath = remember(key, elementType, state.project, state.pack) {
+                if (isImage || isAudio) {
+                    controller.referenceResourceFile(elementType, key)
+                } else {
+                    null
+                }
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1305,6 +1572,15 @@ private fun ReferenceListEditor(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (isImage && resourcePath != null) {
+                    FileImage(
+                        path = resourcePath,
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        contentDescription = key,
+                    )
+                }
                 Text(
                     text = key,
                     style = MaterialTheme.typography.bodySmall,
@@ -1318,6 +1594,29 @@ private fun ReferenceListEditor(
                     warning = display.warning,
                     error = !display.resolved && !display.warning,
                 )
+                if (isAudio && resourcePath != null) {
+                    var audioError by remember(resourcePath) { mutableStateOf(false) }
+                    val playing = AudioPreview.playingPath == resourcePath
+                    IconButton(
+                        onClick = { audioError = !AudioPreview.toggle(resourcePath) },
+                        modifier = Modifier.size(24.dp),
+                    ) {
+                        Icon(
+                            imageVector = if (playing) {
+                                Icons.Outlined.Stop
+                            } else {
+                                Icons.Outlined.PlayArrow
+                            },
+                            contentDescription = if (playing) "停止试听" else "试听",
+                            modifier = Modifier.size(15.dp),
+                            tint = if (audioError) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            },
+                        )
+                    }
+                }
                 if (editable) {
                     IconButton(
                         onClick = { controller.moveReference(documentId, row.path, index, index - 1) },
@@ -1440,7 +1739,7 @@ private fun flattenFields(
     rows.forEach { row ->
         result += VisibleField(row, depth)
         val isExpanded = expanded[row.path.format()] ?: forceExpand
-        if (isExpanded && row.children.isNotEmpty() && row.typeName != LOCALIZED_STRING_TYPE) {
+        if (isExpanded && isRowExpandable(row)) {
             result += flattenFields(row.children, expanded, depth + 1, forceExpand)
         }
     }
@@ -1464,7 +1763,7 @@ private fun favoriteVisibleRows(
     val result = mutableListOf<VisibleField>()
     favorites.forEach { row ->
         result += VisibleField(row, 0)
-        if (expanded[row.path.format()] == true && row.children.isNotEmpty()) {
+        if (expanded[row.path.format()] == true && isRowExpandable(row)) {
             result += flattenFields(row.children, expanded, depth = 1)
         }
     }

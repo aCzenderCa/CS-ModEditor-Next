@@ -9,8 +9,10 @@ import org.zender.editor.diagnostics.Diagnostic
 import org.zender.editor.document.DocumentId
 import org.zender.editor.document.JsonDocument
 import org.zender.editor.document.JsonFormat
+import org.zender.editor.document.JsonNode
 import org.zender.editor.document.JsonPath
 import org.zender.editor.document.JsonPathSegment
+import org.zender.editor.document.Member
 import org.zender.editor.document.RawJsonDocument
 import org.zender.editor.document.readPath
 import org.zender.editor.edit.AddInlineElementCommand
@@ -50,6 +52,8 @@ import org.zender.editor.pack.PackHistoryStore
 import org.zender.editor.pack.PackInfo
 import org.zender.editor.pack.PackInfoReader
 import org.zender.editor.pack.PackLoadOptions
+import org.zender.editor.schema.FieldKind
+import org.zender.editor.schema.FieldSchema
 import org.zender.editor.schema.SchemaLoadOptions
 import org.zender.editor.picker.PickerItem
 import org.zender.editor.picker.PickerQuery
@@ -64,9 +68,12 @@ import org.zender.editor.project.ProjectFolder
 import org.zender.editor.project.ProjectFolderPath
 import org.zender.editor.project.ModValidator
 import org.zender.editor.project.NewObjectRequest
+import org.zender.editor.project.NewPatchRequest
+import org.zender.editor.project.PatchKind
 import org.zender.editor.project.ProjectObject
 import org.zender.editor.project.ProjectObjectFactory
 import org.zender.editor.project.ProjectObjectKind
+import org.zender.editor.project.ProjectPatchFactory
 import org.zender.editor.project.ProjectReferenceResolver
 import org.zender.editor.project.ReferenceCheck
 import org.zender.editor.project.ResourceImporter
@@ -91,6 +98,7 @@ import org.zender.editor.window.WindowContentKey
 import org.zender.editor.window.WindowGeometry
 import org.zender.editor.window.WindowId
 import org.zender.editor.window.WindowManager
+import java.nio.file.Files
 import java.nio.file.Path
 
 /**
@@ -513,6 +521,206 @@ class WorkspaceController(
         return true
     }
 
+    /** 为指定对象新建或打开 GameSourceModify 补丁。 */
+    fun createGameSourceModifyPatch(
+        type: String,
+        name: String,
+        category: String? = null,
+    ): Boolean = createPatch(PatchKind.GAME_SOURCE_MODIFY, type, name, category)
+
+    /** 为指定无 GUID 对象新建或打开 DataObjectModify 补丁（仅 MC）。 */
+    fun createDataObjectModifyPatch(type: String, name: String): Boolean =
+        createPatch(PatchKind.DATA_OBJECT_MODIFY, type, name)
+
+    private fun createPatch(
+        kind: PatchKind,
+        type: String,
+        name: String,
+        category: String? = null,
+    ): Boolean {
+        val current = project ?: return fail("尚未打开工程")
+        val projectObject = current.objectOf(type, name)
+        val packEntry = pack?.objectEntry(type, name)
+        if (projectObject == null && packEntry == null) {
+            return fail("对象不存在：$type/$name")
+        }
+        val uniqueId = projectObject?.uniqueId ?: packEntry?.uniqueId
+
+        // 已有补丁直接打开，避免重复创建。
+        if (kind == PatchKind.GAME_SOURCE_MODIFY && uniqueId != null) {
+            current.workingTree.gameSourceModify(uniqueId)?.let { existing ->
+                openPatch(existing)
+                status = "已打开 GameSourceModify：$uniqueId"
+                statusIsError = false
+                return true
+            }
+        }
+        if (kind == PatchKind.DATA_OBJECT_MODIFY) {
+            val dataKey = if (projectObject != null) "${current.namespace}:$name" else name
+            current.workingTree.dataObjectModify(type, dataKey)?.let { existing ->
+                openDataObjectModify(existing.type, existing.dataKey)
+                status = "已打开 DataObjectModify：$type/$dataKey"
+                statusIsError = false
+                return true
+            }
+        }
+
+        val result = ProjectPatchFactory(pack).create(
+            current,
+            NewPatchRequest(kind = kind, type = type, name = name, category = category),
+        )
+        diagnostics = result.diagnostics
+        val updated = result.project
+        if (updated == null) {
+            return fail(result.diagnostics.firstOrNull { it.isError }?.message ?: "创建补丁失败")
+        }
+        project = updated
+        session.markProjectDirty()
+        val gameSourceModify = result.gameSourceModify
+        val dataObjectModify = result.dataObjectModify
+        val opened = when {
+            gameSourceModify != null -> openPatch(gameSourceModify)
+            dataObjectModify != null -> openDataObjectModify(
+                dataObjectModify.type,
+                dataObjectModify.dataKey,
+            )
+
+            else -> false
+        }
+        if (!opened) {
+            return fail("补丁已创建但无法打开")
+        }
+        status = when {
+            gameSourceModify != null ->
+                "已新建 GameSourceModify：${gameSourceModify.relativePath}"
+
+            dataObjectModify != null ->
+                "已新建 DataObjectModify：${dataObjectModify.relativePath}"
+
+            else -> "已新建补丁"
+        }
+        statusIsError = false
+        refresh()
+        return true
+    }
+
+    /** 补丁中尚未出现、可添加到补丁的 Schema 顶层字段。 */
+    fun patchFieldCandidates(documentId: DocumentId): List<PatchFieldCandidate> {
+        val target = targets[documentId] ?: return emptyList()
+        if (!target.isPatch) return emptyList()
+        val typeName = target.schemaType ?: return emptyList()
+        val schema = pack?.schemaRepository?.schema(typeName) ?: return emptyList()
+        val root = session.document(documentId)?.root as? JsonNode.ObjectNode ?: return emptyList()
+        // `FieldWarpData` / `FieldWarpType` 已经存在时，字段本身也视为已添加。
+        val existing = buildSet {
+            root.members.forEach { member ->
+                add(member.name)
+                WarpFields.baseNameOrNull(member.name)?.let(::add)
+            }
+        }
+        return schema.fields
+            .filter { it.name !in existing && !it.isReadOnly && isWarpAddableField(it) }
+            .map { field ->
+                PatchFieldCandidate(
+                    name = field.name,
+                    displayName = field.displayName(),
+                    typeLabel = fieldTypeLabel(field),
+                )
+            }
+    }
+
+    /**
+     * 向补丁添加一个 Warp 字段。
+     *
+     * 与游戏加载器一致，引用字段只写 `XxxWarpData` / `XxxWarpType` 配对，
+     * 不写字段本体；ModLoader 的特殊 `*WarpData` 字段直接按数组/字符串添加。
+     * 普通值字段不在此处创建。
+     */
+    fun addPatchField(documentId: DocumentId, fieldName: String): Boolean {
+        val target = requireEditableTarget(documentId) ?: return false
+        if (!target.isPatch) return fail("只有补丁可以添加 Warp 字段")
+        val typeName = target.schemaType ?: return fail("补丁目标类型未知")
+        val field = pack?.schemaRepository?.schema(typeName)?.field(fieldName)
+            ?: return fail("Schema 中不存在字段：$fieldName")
+        if (!isWarpAddableField(field)) {
+            return fail("只支持添加 Warp 引用字段，普通值字段不能直接创建")
+        }
+        val root = session.document(documentId)?.root as? JsonNode.ObjectNode
+            ?: return fail("补丁文档根节点不是对象")
+        val path = JsonPath.key(fieldName)
+
+        if (root.get(fieldName) == null) {
+            var updated = root
+            val isReference = field.kind == FieldKind.REFERENCE
+            val isReferenceList = field.kind == FieldKind.LIST &&
+                field.elementKind == FieldKind.REFERENCE
+            if (isReference || isReferenceList) {
+                val emptyData = if (isReferenceList) {
+                    JsonNode.ArrayNode(emptyList())
+                } else {
+                    JsonNode.StringNode("")
+                }
+                val warpType = if (isReferenceList) {
+                    WarpType.ADD_REFERENCE.value
+                } else {
+                    WarpType.REFERENCE.value
+                }
+                updated = updated
+                    .withMemberIfAbsent(WarpFields.dataName(fieldName), emptyData)
+                    .withMemberIfAbsent(
+                        WarpFields.typeName(fieldName),
+                        JsonNode.NumberNode(warpType.toString()),
+                    )
+            } else {
+                // ModLoader 的特殊 *WarpData 字段（如 MatchTagWarpData）本身就是数据。
+                updated = updated.withMemberIfAbsent(fieldName, defaultPatchValue(field))
+            }
+            if (updated != root) {
+                val added = executeCommand(
+                    documentId,
+                    ReplaceDocumentCommand("添加 Warp 字段 $fieldName", JsonDocument(updated)),
+                )
+                if (!added) return false
+            }
+        }
+        // 清掉搜索/收藏过滤，确保刚添加的字段可见。
+        fieldOptions = FieldViewOptions()
+        selectField(documentId, path)
+        status = "已添加 Warp 字段：$fieldName"
+        statusIsError = false
+        refresh()
+        return true
+    }
+
+    private fun JsonNode.ObjectNode.withMemberIfAbsent(
+        name: String,
+        value: JsonNode,
+    ): JsonNode.ObjectNode =
+        if (get(name) == null) JsonNode.ObjectNode(members + Member(name, value)) else this
+
+    private fun isWarpAddableField(field: FieldSchema): Boolean =
+        field.kind == FieldKind.REFERENCE ||
+            (field.kind == FieldKind.LIST && field.elementKind == FieldKind.REFERENCE) ||
+            field.name.endsWith(WarpFields.DATA_SUFFIX)
+
+    private fun fieldTypeLabel(field: FieldSchema): String = when {
+        field.kind == FieldKind.REFERENCE -> "引用 · ${field.typeName}"
+        field.kind == FieldKind.LIST && field.elementKind == FieldKind.REFERENCE ->
+            "引用列表 · ${field.elementTypeName ?: field.typeName}"
+
+        field.name.endsWith(WarpFields.DATA_SUFFIX) -> "Warp 数据"
+        else -> field.typeName
+    }
+
+    private fun defaultPatchValue(field: FieldSchema): JsonNode = field.templateValue ?: when (field.kind) {
+        FieldKind.BOOLEAN -> JsonNode.BooleanNode.FALSE
+        FieldKind.INTEGER, FieldKind.FLOAT -> JsonNode.NumberNode("0")
+        FieldKind.STRING -> JsonNode.StringNode("")
+        FieldKind.ENUM -> field.enumValues.firstOrNull()?.value ?: JsonNode.StringNode("")
+        FieldKind.LIST -> JsonNode.ArrayNode(emptyList())
+        FieldKind.OBJECT, FieldKind.REFERENCE, FieldKind.UNKNOWN -> JsonNode.ObjectNode.EMPTY
+    }
+
     /**
      * 从工程删除对象：关闭对应文档，并从工作树移除；保存工程时删除磁盘文件。
      */
@@ -521,7 +729,58 @@ class WorkspaceController(
         val entry = current.workingTree.objectOf(type, name)
             ?: return fail("工程中不存在对象：$type/$name")
         val documentId = objectDocumentId(type, name)
+        closeDocumentForDeletion(documentId)
 
+        project = current.withWorkingTree(current.workingTree.withoutObject(entry.key))
+        session.markProjectDirty()
+        validation = emptyList()
+        diagnostics = emptyList()
+        status = "已删除对象：$type/$name（保存工程后删除磁盘文件）"
+        statusIsError = false
+        refresh()
+        return true
+    }
+
+    /** 从工程删除 GameSourceModify 补丁；保存工程时删除磁盘文件。 */
+    fun deleteGameSourceModify(targetGuid: String): Boolean {
+        val current = project ?: return fail("尚未打开工程")
+        val patch = current.workingTree.gameSourceModify(targetGuid)
+            ?: return fail("工程中不存在 GameSourceModify：$targetGuid")
+        closeDocumentForDeletion(gsmDocumentId(targetGuid))
+
+        project = current.withWorkingTree(
+            current.workingTree.withoutGameSourceModify(targetGuid),
+        )
+        session.markProjectDirty()
+        validation = emptyList()
+        diagnostics = emptyList()
+        status = "已删除 GameSourceModify 补丁：${patch.relativePath}（保存工程后删除磁盘文件）"
+        statusIsError = false
+        refresh()
+        return true
+    }
+
+    /** 从工程删除 DataObjectModify 补丁；保存工程时删除磁盘文件。 */
+    fun deleteDataObjectModify(type: String, dataKey: String): Boolean {
+        val current = project ?: return fail("尚未打开工程")
+        val patch = current.workingTree.dataObjectModify(type, dataKey)
+            ?: return fail("工程中不存在 DataObjectModify：$type/$dataKey")
+        closeDocumentForDeletion(domDocumentId(type, dataKey))
+
+        project = current.withWorkingTree(
+            current.workingTree.withoutDataObjectModify(type, dataKey),
+        )
+        session.markProjectDirty()
+        validation = emptyList()
+        diagnostics = emptyList()
+        status = "已删除 DataObjectModify 补丁：${patch.relativePath}（保存工程后删除磁盘文件）"
+        statusIsError = false
+        refresh()
+        return true
+    }
+
+    /** 关闭删除目标对应的文档及其分离窗口。 */
+    private fun closeDocumentForDeletion(documentId: DocumentId) {
         val deletedWindows = windowDocuments.entries.filter { it.value == documentId }
             .map { it.key }
         deletedWindows.forEach { windowId ->
@@ -532,12 +791,77 @@ class WorkspaceController(
         if (documentId in targets) {
             closeDocument(documentId, force = true)
         }
+    }
 
-        project = current.withWorkingTree(current.workingTree.withoutObject(entry.key))
+    /** 把工程对象移动到类型目录下的子文件夹；[folder] 为 null 表示类型根目录。 */
+    fun moveProjectObjectToFolder(type: String, name: String, folder: String?): Boolean {
+        val current = project ?: return fail("尚未打开工程")
+        val entry = current.workingTree.objectOf(type, name)
+            ?: return fail("工程中不存在对象：$type/$name")
+        val normalized = try {
+            ProjectFolderPath.normalize(folder)
+        } catch (e: IllegalArgumentException) {
+            return fail(e.message ?: "文件夹路径不合法")
+        }
+        val directory = if (entry.kind == ProjectObjectKind.UNIQUE_ID) {
+            current.format.uniqueIdObjectDirectory(type)
+        } else {
+            current.format.scriptableObjectDirectory(type)
+        }
+        val relativePath = if (normalized == null) {
+            "$directory/$name.json"
+        } else {
+            "$directory/$normalized/$name.json"
+        }
+        if (relativePath == entry.relativePath) {
+            status = "对象已在该文件夹：$type/$name"
+            statusIsError = false
+            refresh()
+            return true
+        }
+
+        val tree = current.workingTree
+            .withObject(entry.copy(relativePath = relativePath))
+            .copy(deletedPaths = current.workingTree.deletedPaths + entry.relativePath)
+        project = current.withWorkingTree(tree)
+        val documentId = objectDocumentId(type, name)
+        (targets[documentId] as? DocumentTarget.ProjectObjectTarget)?.let { target ->
+            targets[documentId] = target.copy(relativePath = relativePath)
+        }
         session.markProjectDirty()
-        validation = emptyList()
-        diagnostics = emptyList()
-        status = "已删除对象：$type/$name（保存工程后删除磁盘文件）"
+        status = "已移动对象：$type/$name → ${normalized ?: "根目录"}"
+        statusIsError = false
+        refresh()
+        return true
+    }
+
+    /** 把 GameSourceModify 移动到其目录下的子文件夹；[folder] 为 null 表示根目录。 */
+    fun moveGameSourceModifyToFolder(targetGuid: String, folder: String?): Boolean {
+        val current = project ?: return fail("尚未打开工程")
+        val patch = current.workingTree.gameSourceModify(targetGuid)
+            ?: return fail("工程中不存在 GameSourceModify：$targetGuid")
+        val normalized = try {
+            ProjectFolderPath.normalize(folder)
+        } catch (e: IllegalArgumentException) {
+            return fail(e.message ?: "文件夹路径不合法")
+        }
+        val relativePath = current.format.gameSourceModifyPath(targetGuid, normalized)
+        if (relativePath == patch.relativePath) {
+            status = "GameSourceModify 已在该文件夹：$targetGuid"
+            statusIsError = false
+            refresh()
+            return true
+        }
+        val tree = current.workingTree
+            .withGameSourceModify(patch.copy(relativePath = relativePath))
+            .copy(deletedPaths = current.workingTree.deletedPaths + patch.relativePath)
+        project = current.withWorkingTree(tree)
+        val documentId = gsmDocumentId(targetGuid)
+        (targets[documentId] as? DocumentTarget.GameSourceModifyTarget)?.let { target ->
+            targets[documentId] = target.copy(relativePath = relativePath)
+        }
+        session.markProjectDirty()
+        status = "已移动 GameSourceModify：$targetGuid → ${normalized ?: "根目录"}"
         statusIsError = false
         refresh()
         return true
@@ -1528,6 +1852,32 @@ class WorkspaceController(
     fun packResourceFile(entry: ResourceEntry): Path? =
         (entry.sourceRoot ?: packRoot)?.resolve(entry.relativePath)
 
+    /**
+     * 把图片/音频引用键解析为本地文件，供字段预览与试听使用。
+     * 资源键遵循框架编码：ML 为裸文件名，MC 为 `Namespace:文件名`。
+     */
+    fun referenceResourceFile(typeName: String?, key: String?): Path? {
+        if (key.isNullOrBlank()) return null
+        val kind = if (typeName == "AudioClip") ResourceKind.AUDIO else ResourceKind.IMAGE
+        val referenceKind = if (kind == ResourceKind.AUDIO) {
+            ReferenceKind.AUDIO
+        } else {
+            ReferenceKind.SPRITE
+        }
+        val name = runCatching {
+            project?.keyCodec?.decodeResourceKey(key, referenceKind, typeName)?.key
+        }.getOrNull()?.takeIf { it.isNotBlank() } ?: key.substringAfterLast(':')
+
+        val projectFile = project?.workingTree?.resources?.values
+            ?.firstOrNull { it.kind == kind && it.key == name }
+            ?.let { projectResourceFile(it.relativePath, kind) }
+        if (projectFile != null && Files.isRegularFile(projectFile)) return projectFile
+
+        val entry = pack?.resources?.find(name, kind) ?: return null
+        val packFile = packResourceFile(entry) ?: return null
+        return packFile.takeIf { Files.isRegularFile(it) }
+    }
+
     // ---------------------------------------------------------------- 本地化
 
     fun localizationEntries(): List<LocalizationEntry> =
@@ -1685,7 +2035,7 @@ class WorkspaceController(
                     setViewMode(documentId, DocumentViewMode.FIELD)
                 }
                 // 清掉搜索/收藏过滤，确保被定位的字段一定能显示出来。
-                fieldOptions = FieldViewOptions(showDefaults = true, showUnknown = true)
+                fieldOptions = FieldViewOptions(showUnknown = true)
                 val info = fieldInfo(documentId, fieldPath)
                 selectField(
                     documentId = documentId,

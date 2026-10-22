@@ -9,6 +9,9 @@ import org.zender.editor.localization.LocalizationEntry
 import org.zender.editor.pack.DataPack
 import org.zender.editor.project.ModProject
 import org.zender.editor.project.NewObjectRequest
+import org.zender.editor.project.NewPatchRequest
+import org.zender.editor.project.NewProjectRequest
+import org.zender.editor.project.PatchKind
 import org.zender.editor.project.ProjectObject
 import org.zender.editor.project.ResourceImportResult
 import org.zender.editor.resource.ResourceKind
@@ -36,6 +39,13 @@ data class EditOutcome(
     val message: String? = null,
 )
 
+/** 新建补丁的结果。 */
+data class PatchOutcome(
+    val kind: PatchKind,
+    val relativePath: String,
+    val target: String,
+)
+
 /**
  * MCP 工具操作的工作区抽象。
  *
@@ -61,6 +71,12 @@ interface McpWorkspace {
      */
     fun openProject(root: Path, packPath: Path?): ModProject
 
+    /**
+     * 在空目录创建 ML/MC 工程并切换为当前工程。
+     * 目录必须为空或不存在；已存在的工程请用 [openProject]。
+     */
+    fun createProject(request: NewProjectRequest): ModProject
+
     fun saveProject(targetRoot: Path?): SaveOutcome
 
     /** 读取对象最新文档；[source] 为 `auto` / `project` / `pack`。 */
@@ -82,6 +98,9 @@ interface McpWorkspace {
     fun removeReference(type: String, name: String, field: JsonPath, index: Int): EditOutcome
 
     fun createObject(request: NewObjectRequest): ProjectObject
+
+    /** 为数据包/工程对象新建 GameSourceModify 或 DataObjectModify 补丁。 */
+    fun createPatch(request: NewPatchRequest): PatchOutcome
 
     fun updateLocalization(key: String, english: String?, chinese: String?): LocalizationEntry
 

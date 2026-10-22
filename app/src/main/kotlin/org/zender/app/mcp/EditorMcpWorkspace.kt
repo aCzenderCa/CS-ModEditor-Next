@@ -13,6 +13,9 @@ import org.zender.editor.localization.LocalizationEntry
 import org.zender.editor.pack.DataPack
 import org.zender.editor.project.ModProject
 import org.zender.editor.project.NewObjectRequest
+import org.zender.editor.project.NewPatchRequest
+import org.zender.editor.project.NewProjectRequest
+import org.zender.editor.project.PatchKind
 import org.zender.editor.project.ProjectObject
 import org.zender.editor.project.ResourceImportResult
 import org.zender.editor.resource.ResourceKind
@@ -20,6 +23,7 @@ import org.zender.mcp.EditOutcome
 import org.zender.mcp.McpToolException
 import org.zender.mcp.McpWorkspace
 import org.zender.mcp.ObjectDocument
+import org.zender.mcp.PatchOutcome
 import org.zender.mcp.SaveOutcome
 import java.nio.file.Path
 import javax.swing.SwingUtilities
@@ -79,6 +83,29 @@ class EditorMcpWorkspace(
             }
         }
         return loaded
+    }
+
+    override fun createProject(request: NewProjectRequest): ModProject = suspendOnEdt {
+        val created = controller.createProject(
+            root = request.root,
+            framework = request.framework,
+            name = request.name,
+            namespace = request.namespace,
+            author = request.author,
+            version = request.version,
+        )
+        if (!created) throw McpToolException(status())
+        controller.loadProject(request.root)
+        val current = state
+        val loaded = current.project ?: throw McpToolException(status())
+        val expected = request.root.toAbsolutePath().normalize()
+        val actual = current.projectRoot?.toAbsolutePath()?.normalize()
+        if (current.statusIsError || actual != expected) {
+            throw McpToolException(
+                current.status.ifBlank { "工程创建后加载失败：${request.root}" },
+            )
+        }
+        loaded
     }
 
     override fun saveProject(targetRoot: Path?): SaveOutcome {
@@ -194,6 +221,47 @@ class EditorMcpWorkspace(
             sourceDocument = request.sourceDocument,
             uniqueId = request.uniqueId,
         ) ?: throw McpToolException(status())
+    }
+
+    override fun createPatch(request: NewPatchRequest): PatchOutcome = onEdt {
+        val ok = when (request.kind) {
+            PatchKind.GAME_SOURCE_MODIFY ->
+                controller.createGameSourceModifyPatch(request.type, request.name)
+
+            PatchKind.DATA_OBJECT_MODIFY ->
+                controller.createDataObjectModifyPatch(request.type, request.name)
+        }
+        if (!ok) throw McpToolException(status())
+        val current = state.project ?: throw McpToolException(status())
+        when (request.kind) {
+            PatchKind.GAME_SOURCE_MODIFY -> {
+                val uniqueId = current.objectOf(request.type, request.name)?.uniqueId
+                    ?: state.pack?.objectEntry(request.type, request.name)?.uniqueId
+                    ?: throw McpToolException("目标缺少 UniqueID：${request.type}/${request.name}")
+                val patch = current.workingTree.gameSourceModify(uniqueId)
+                    ?: throw McpToolException("GameSourceModify 创建失败：$uniqueId")
+                PatchOutcome(
+                    kind = PatchKind.GAME_SOURCE_MODIFY,
+                    relativePath = patch.relativePath,
+                    target = patch.targetGuid,
+                )
+            }
+
+            PatchKind.DATA_OBJECT_MODIFY -> {
+                val dataKey = if (current.objectOf(request.type, request.name) != null) {
+                    "${current.namespace}:${request.name}"
+                } else {
+                    request.name
+                }
+                val patch = current.workingTree.dataObjectModify(request.type, dataKey)
+                    ?: throw McpToolException("DataObjectModify 创建失败：${request.type}/$dataKey")
+                PatchOutcome(
+                    kind = PatchKind.DATA_OBJECT_MODIFY,
+                    relativePath = patch.relativePath,
+                    target = "${patch.type}/${patch.dataKey}",
+                )
+            }
+        }
     }
 
     override fun updateLocalization(

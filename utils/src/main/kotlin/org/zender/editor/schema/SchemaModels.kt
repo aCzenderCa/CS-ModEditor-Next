@@ -74,6 +74,8 @@ data class FieldSchema(
     val isReadOnly: Boolean = false,
     val templateValue: JsonNode? = null,
     val documentation: FieldDocumentation = FieldDocumentation(),
+    /** 仅当 JSON 中实际存在该键时展示；用于 ModLoader 等框架追加的可选字段。 */
+    val optionalWhenAbsent: Boolean = false,
 ) {
     val isList: Boolean get() = kind == FieldKind.LIST
 

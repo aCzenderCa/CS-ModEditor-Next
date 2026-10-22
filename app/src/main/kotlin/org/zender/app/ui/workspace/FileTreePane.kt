@@ -2,6 +2,8 @@ package org.zender.app.ui.workspace
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +42,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -47,8 +50,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
@@ -59,9 +73,19 @@ import org.zender.app.workspace.WorkspaceController
 import org.zender.app.workspace.WorkspaceScreen
 import org.zender.app.workspace.WorkspaceUiState
 import org.zender.editor.document.JsonDocument
+import org.zender.editor.framework.FrameworkId
+import org.zender.editor.project.PatchKind
 import org.zender.editor.project.ProjectObjectKind
 
 private data class VisibleTreeNode(val node: FileTreeNode, val depth: Int)
+
+private data class PatchTargetCandidate(
+    val type: String,
+    val name: String,
+    val displayName: String?,
+    val source: String,
+    val existing: Boolean,
+)
 
 private data class FolderCreationTarget(
     val type: String,
@@ -101,6 +125,11 @@ fun FileTreePane(
     var newFolderTarget by remember { mutableStateOf<FolderCreationTarget?>(null) }
     var newFolderName by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<FileTreeNode?>(null) }
+    var newPatchKind by remember { mutableStateOf<PatchKind?>(null) }
+    var newPatchCategory by remember { mutableStateOf<String?>(null) }
+    var dragNode by remember { mutableStateOf<FileTreeNode?>(null) }
+    var dropTargetId by remember { mutableStateOf<String?>(null) }
+    val rowBounds = remember { mutableStateMapOf<String, Rect>() }
     val expanded = remember(state.projectRoot) { mutableStateMapOf<String, Boolean>() }
 
     fun openNewObject(
@@ -124,6 +153,118 @@ fun FileTreePane(
         showNewObject = true
     }
 
+    /** 对象/数据包条目的补丁创建入口；已有补丁时显示“打开”。 */
+    fun patchActions(type: String, name: String): List<Pair<String, () -> Unit>> {
+        val current = state.project ?: return emptyList()
+        val projectObject = current.objectOf(type, name)
+        val packEntry = state.pack?.objectEntry(type, name)
+        val uniqueId = projectObject?.uniqueId ?: packEntry?.uniqueId
+        if (uniqueId != null) {
+            val existing = current.workingTree.gameSourceModify(uniqueId)
+            return listOf(
+                (if (existing != null) "打开 GameSourceModify" else "新建 GameSourceModify 补丁") to {
+                    controller.createGameSourceModifyPatch(type, name)
+                },
+            )
+        }
+        if (current.framework == FrameworkId.MC) {
+            val dataKey = if (projectObject != null) "${current.namespace}:$name" else name
+            val existing = current.workingTree.dataObjectModify(type, dataKey)
+            return listOf(
+                (if (existing != null) "打开 DataObjectModify" else "新建 DataObjectModify 补丁") to {
+                    controller.createDataObjectModifyPatch(type, name)
+                },
+            )
+        }
+        return emptyList()
+    }
+
+    fun patchCandidates(kind: PatchKind): List<PatchTargetCandidate> {
+        val current = state.project ?: return emptyList()
+        val result = mutableListOf<PatchTargetCandidate>()
+        val seen = HashSet<Pair<String, String>>()
+
+        current.workingTree.objects.values.forEach { entry ->
+            val guid = entry.uniqueId
+            val matches = if (kind == PatchKind.GAME_SOURCE_MODIFY) {
+                guid != null
+            } else {
+                guid == null
+            }
+            if (!matches) return@forEach
+            val key = entry.type to entry.name
+            if (!seen.add(key)) return@forEach
+            val existing = if (kind == PatchKind.GAME_SOURCE_MODIFY) {
+                current.workingTree.gameSourceModify(guid!!) != null
+            } else {
+                current.workingTree.dataObjectModify(
+                    entry.type,
+                    "${current.namespace}:${entry.name}",
+                ) != null
+            }
+            result += PatchTargetCandidate(
+                type = entry.type,
+                name = entry.name,
+                displayName = null,
+                source = "工程",
+                existing = existing,
+            )
+        }
+
+        state.pack?.objectIndex?.entries.orEmpty().forEach { entry ->
+            val guid = entry.uniqueId
+            val matches = if (kind == PatchKind.GAME_SOURCE_MODIFY) {
+                guid != null
+            } else {
+                guid == null
+            }
+            if (!matches) return@forEach
+            val key = entry.type to entry.name
+            if (!seen.add(key)) return@forEach
+            val existing = if (kind == PatchKind.GAME_SOURCE_MODIFY) {
+                current.workingTree.gameSourceModify(guid!!) != null
+            } else {
+                current.workingTree.dataObjectModify(entry.type, entry.name) != null
+            }
+            result += PatchTargetCandidate(
+                type = entry.type,
+                name = entry.name,
+                displayName = entry.displayName,
+                source = "数据包",
+                existing = existing,
+            )
+        }
+        return result.sortedWith(compareBy({ it.type }, { it.name }))
+    }
+
+    fun isDraggable(node: FileTreeNode): Boolean =
+        node.kind == FileTreeNodeKind.OBJECT ||
+            node.kind == FileTreeNodeKind.GAME_SOURCE_MODIFY
+
+    fun isValidDropTarget(source: FileTreeNode, target: FileTreeNode): Boolean {
+        if (!isDraggable(source) || target.kind != FileTreeNodeKind.GROUP) return false
+        return when (source.kind) {
+            FileTreeNodeKind.OBJECT -> {
+                val entry = state.project?.objectOf(
+                    source.type.orEmpty(),
+                    source.name.orEmpty(),
+                ) ?: return false
+                val prefix = if (entry.kind == ProjectObjectKind.UNIQUE_ID) {
+                    "group:uid:"
+                } else {
+                    "group:so:"
+                }
+                val type = source.type.orEmpty()
+                target.id == "$prefix$type" || target.id.startsWith("$prefix$type:")
+            }
+
+            FileTreeNodeKind.GAME_SOURCE_MODIFY ->
+                target.id == "group:gsm" || target.id.startsWith("group:gsm:")
+
+            else -> false
+        }
+    }
+
     val filter = FileTreeFilter(
         keyword = keyword,
         type = typeFilter,
@@ -135,6 +276,9 @@ fun FileTreePane(
     }
     val visible = remember(nodes, expanded.toMap(), keyword) {
         flatten(nodes, expanded, forceExpand = keyword.isNotBlank())
+    }
+    val nodesById = remember(visible) {
+        visible.associate { it.node.id to it.node }
     }
     val types = remember(state.project, state.pack, includePackObjects) {
         (
@@ -273,39 +417,67 @@ fun FileTreePane(
                             val type = node.type.orEmpty()
                             val name = node.name.orEmpty()
                             val entry = state.pack?.objectEntry(type, name)
+                            val actions = patchActions(type, name).toMutableList()
                             if (entry?.hasDataFile == true) {
                                 val kind = if (entry.uniqueId != null) {
                                     ProjectObjectKind.UNIQUE_ID
                                 } else {
                                     ProjectObjectKind.SCRIPTABLE_OBJECT
                                 }
-                                listOf(
-                                    "复制到工程…" to {
-                                        val source = controller.readPackObjectDocument(type, name)
-                                        if (source != null) {
-                                            openNewObject(
-                                                type = type,
-                                                kind = kind,
-                                                name = controller.suggestObjectName(
-                                                    type,
-                                                    "${name}_Copy",
-                                                ),
-                                                source = source,
-                                                sourceName = "$type/$name",
-                                                typeLocked = true,
-                                                kindLocked = true,
-                                            )
-                                        }
-                                    },
-                                )
-                            } else {
-                                emptyList()
+                                actions += "复制到工程…" to {
+                                    val source = controller.readPackObjectDocument(type, name)
+                                    if (source != null) {
+                                        openNewObject(
+                                            type = type,
+                                            kind = kind,
+                                            name = controller.suggestObjectName(
+                                                type,
+                                                "${name}_Copy",
+                                            ),
+                                            source = source,
+                                            sourceName = "$type/$name",
+                                            typeLocked = true,
+                                            kindLocked = true,
+                                        )
+                                    }
+                                }
                             }
+                            actions
                         }
 
-                        node.kind == FileTreeNodeKind.OBJECT -> listOf(
-                            "删除对象…" to { deleteTarget = node },
-                        )
+                        node.kind == FileTreeNodeKind.OBJECT ->
+                            patchActions(node.type.orEmpty(), node.name.orEmpty()) + listOf(
+                                "删除对象…" to { deleteTarget = node },
+                            )
+
+                        node.kind == FileTreeNodeKind.GAME_SOURCE_MODIFY ||
+                            node.kind == FileTreeNodeKind.DATA_OBJECT_MODIFY ->
+                            listOf("删除补丁…" to { deleteTarget = node })
+
+                        node.kind == FileTreeNodeKind.GROUP && node.id == "group:gsm" ->
+                            listOf(
+                                "新建 GameSourceModify 补丁…" to {
+                                    newPatchCategory = null
+                                    newPatchKind = PatchKind.GAME_SOURCE_MODIFY
+                                },
+                            )
+
+                        node.kind == FileTreeNodeKind.GROUP &&
+                            node.id.startsWith("group:gsm:") ->
+                            listOf(
+                                "在此文件夹新建 GameSourceModify 补丁…" to {
+                                    newPatchCategory = node.folder
+                                    newPatchKind = PatchKind.GAME_SOURCE_MODIFY
+                                },
+                            )
+
+                        node.kind == FileTreeNodeKind.GROUP && node.id == "group:dom" ->
+                            listOf(
+                                "新建 DataObjectModify 补丁…" to {
+                                    newPatchCategory = null
+                                    newPatchKind = PatchKind.DATA_OBJECT_MODIFY
+                                },
+                            )
 
                         // 类型目录下的子文件夹（对象还可以继续嵌套多层）。
                         node.kind == FileTreeNodeKind.GROUP && node.folder != null &&
@@ -379,6 +551,51 @@ fun FileTreePane(
                         expanded = isExpanded,
                         selected = selected,
                         contextActions = contextActions,
+                        draggable = isDraggable(node),
+                        deletable = node.kind == FileTreeNodeKind.OBJECT ||
+                            node.kind == FileTreeNodeKind.GAME_SOURCE_MODIFY ||
+                            node.kind == FileTreeNodeKind.DATA_OBJECT_MODIFY,
+                        dragging = dragNode?.id == node.id,
+                        dropHighlighted = dropTargetId == node.id,
+                        onBounds = { rowBounds[node.id] = it },
+                        onBoundsRemoved = { rowBounds.remove(node.id) },
+                        onDragStart = {
+                            dragNode = node
+                            dropTargetId = null
+                        },
+                        onDrag = { windowPosition ->
+                            val target = nodesById.values.firstOrNull { candidate ->
+                                candidate.id != node.id &&
+                                    rowBounds[candidate.id]?.contains(windowPosition) == true &&
+                                    isValidDropTarget(node, candidate)
+                            }
+                            dropTargetId = target?.id
+                        },
+                        onDelete = { deleteTarget = node },
+                        onDragEnd = {
+                            val source = dragNode
+                            val target = dropTargetId?.let(nodesById::get)
+                            if (source != null && target != null) {
+                                when (source.kind) {
+                                    FileTreeNodeKind.OBJECT ->
+                                        controller.moveProjectObjectToFolder(
+                                            source.type.orEmpty(),
+                                            source.name.orEmpty(),
+                                            target.folder,
+                                        )
+
+                                    FileTreeNodeKind.GAME_SOURCE_MODIFY ->
+                                        controller.moveGameSourceModifyToFolder(
+                                            source.targetGuid.orEmpty(),
+                                            target.folder,
+                                        )
+
+                                    else -> Unit
+                                }
+                            }
+                            dragNode = null
+                            dropTargetId = null
+                        },
                         onToggle = {
                             if (!node.isLeaf) {
                                 expanded[node.id] = !isExpanded
@@ -450,24 +667,77 @@ fun FileTreePane(
         )
     }
 
+    val patchKind = newPatchKind
+    if (patchKind != null) {
+        NewPatchTargetDialog(
+            kind = patchKind,
+            candidates = patchCandidates(patchKind),
+            onSelect = { candidate ->
+                when (patchKind) {
+                    PatchKind.GAME_SOURCE_MODIFY ->
+                        controller.createGameSourceModifyPatch(
+                            candidate.type,
+                            candidate.name,
+                            newPatchCategory,
+                        )
+
+                    PatchKind.DATA_OBJECT_MODIFY ->
+                        controller.createDataObjectModifyPatch(candidate.type, candidate.name)
+                }
+                newPatchKind = null
+                newPatchCategory = null
+            },
+            onDismiss = {
+                newPatchKind = null
+                newPatchCategory = null
+            },
+        )
+    }
+
     val pendingDelete = deleteTarget
     if (pendingDelete != null) {
+        val isPatch = pendingDelete.kind == FileTreeNodeKind.GAME_SOURCE_MODIFY ||
+            pendingDelete.kind == FileTreeNodeKind.DATA_OBJECT_MODIFY
+        val targetText = when (pendingDelete.kind) {
+            FileTreeNodeKind.GAME_SOURCE_MODIFY ->
+                "GameSourceModify 补丁 ${pendingDelete.targetGuid}"
+
+            FileTreeNodeKind.DATA_OBJECT_MODIFY ->
+                "DataObjectModify 补丁 ${pendingDelete.type}/${pendingDelete.dataKey}"
+
+            else -> "对象 ${pendingDelete.type}/${pendingDelete.name}"
+        }
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
-            title = { Text("删除对象") },
+            title = { Text(if (isPatch) "删除补丁" else "删除对象") },
             text = {
                 Text(
-                    text = "确定删除 ${pendingDelete.type}/${pendingDelete.name}？\n" +
-                        "对象会立即从工作树移除，保存工程后对应 JSON 文件也会被删除。",
+                    text = "确定删除 $targetText？\n" +
+                        "会立即从工作树移除，保存工程后对应 JSON 文件也会被删除。",
                     style = MaterialTheme.typography.bodySmall,
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    controller.deleteProjectObject(
-                        pendingDelete.type.orEmpty(),
-                        pendingDelete.name.orEmpty(),
-                    )
+                    when (pendingDelete.kind) {
+                        FileTreeNodeKind.OBJECT -> controller.deleteProjectObject(
+                            pendingDelete.type.orEmpty(),
+                            pendingDelete.name.orEmpty(),
+                        )
+
+                        FileTreeNodeKind.GAME_SOURCE_MODIFY ->
+                            controller.deleteGameSourceModify(
+                                pendingDelete.targetGuid.orEmpty(),
+                            )
+
+                        FileTreeNodeKind.DATA_OBJECT_MODIFY ->
+                            controller.deleteDataObjectModify(
+                                pendingDelete.type.orEmpty(),
+                                pendingDelete.dataKey.orEmpty(),
+                            )
+
+                        else -> Unit
+                    }
                     deleteTarget = null
                 }) { Text("删除") }
             },
@@ -604,21 +874,55 @@ private fun TreeNodeRow(
     expanded: Boolean,
     selected: Boolean,
     contextActions: List<Pair<String, () -> Unit>> = emptyList(),
+    draggable: Boolean = false,
+    deletable: Boolean = false,
+    dragging: Boolean = false,
+    dropHighlighted: Boolean = false,
+    onBounds: (Rect) -> Unit = {},
+    onBoundsRemoved: () -> Unit = {},
+    onDelete: () -> Unit = {},
+    onDragStart: () -> Unit = {},
+    onDrag: (Offset) -> Unit = {},
+    onDragEnd: () -> Unit = {},
     onToggle: () -> Unit,
     onClick: () -> Unit,
 ) {
-    val background = if (selected) {
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-    } else {
-        Color.Transparent
+    val background = when {
+        dropHighlighted -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+        dragging -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        selected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+        else -> Color.Transparent
     }
     var menuOpen by remember { mutableStateOf(false) }
+    var rowOrigin by remember { mutableStateOf(Offset.Zero) }
+    val focusRequester = remember { FocusRequester() }
+    // 行滚出可视区后清理命中区域，避免拖拽命中已不在屏幕上的旧行。
+    DisposableEffect(node.id) {
+        onDispose { onBoundsRemoved() }
+    }
     Box {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(28.dp)
                 .background(background)
+                .onGloballyPositioned { coordinates ->
+                    val bounds = coordinates.boundsInWindow()
+                    rowOrigin = bounds.topLeft
+                    onBounds(bounds)
+                }
+                .pointerInput(node.id, draggable) {
+                    if (!draggable) return@pointerInput
+                    detectDragGestures(
+                        onDragStart = { onDragStart() },
+                        onDrag = { change, _ ->
+                            change.consume()
+                            onDrag(rowOrigin + change.position)
+                        },
+                        onDragEnd = { onDragEnd() },
+                        onDragCancel = { onDragEnd() },
+                    )
+                }
                 .pointerInput(node.id) {
                     if (contextActions.isEmpty()) return@pointerInput
                     awaitPointerEventScope {
@@ -633,8 +937,22 @@ private fun TreeNodeRow(
                         }
                     }
                 }
+                .focusRequester(focusRequester)
+                .onPreviewKeyEvent { event ->
+                    if (deletable &&
+                        event.type == KeyEventType.KeyDown &&
+                        event.key == Key.Delete
+                    ) {
+                        onDelete()
+                        true
+                    } else {
+                        false
+                    }
+                }
+                .focusable()
                 .clickable(
                     onClick = {
+                        focusRequester.requestFocus()
                         onClick()
                         if (!node.isLeaf) onToggle()
                     },
@@ -707,6 +1025,102 @@ private fun iconFor(node: FileTreeNode): ImageVector = when (node.kind) {
     FileTreeNodeKind.DATA_OBJECT_MODIFY -> Icons.Outlined.Build
     FileTreeNodeKind.LOCALIZATION -> Icons.AutoMirrored.Outlined.Article
     FileTreeNodeKind.RESOURCE -> Icons.Outlined.Image
+}
+
+@Composable
+private fun NewPatchTargetDialog(
+    kind: PatchKind,
+    candidates: List<PatchTargetCandidate>,
+    onSelect: (PatchTargetCandidate) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var keyword by remember { mutableStateOf("") }
+    val filtered = remember(candidates, keyword) {
+        val text = keyword.trim()
+        if (text.isEmpty()) {
+            candidates
+        } else {
+            candidates.filter {
+                it.name.contains(text, ignoreCase = true) ||
+                    it.type.contains(text, ignoreCase = true) ||
+                    it.displayName?.contains(text, ignoreCase = true) == true
+            }
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                if (kind == PatchKind.GAME_SOURCE_MODIFY) {
+                    "新建 GameSourceModify 补丁"
+                } else {
+                    "新建 DataObjectModify 补丁"
+                },
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(
+                    value = keyword,
+                    onValueChange = { keyword = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    label = { Text("搜索目标对象") },
+                )
+                if (filtered.isEmpty()) {
+                    Text(
+                        text = if (kind == PatchKind.GAME_SOURCE_MODIFY) {
+                            "没有带 UniqueID 的目标对象"
+                        } else {
+                            "没有无 GUID 的 ScriptableObject 目标"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxWidth().height(340.dp)) {
+                        items(filtered, key = { "${it.type}/${it.name}" }) { candidate ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onSelect(candidate) }
+                                    .padding(vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = candidate.name,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = buildString {
+                                            append(candidate.type)
+                                            append(" · ").append(candidate.source)
+                                            candidate.displayName
+                                                ?.takeIf { it.isNotBlank() }
+                                                ?.let { append(" · ").append(it) }
+                                        },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                if (candidate.existing) StatusChip("已存在")
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
 }
 
 @Composable

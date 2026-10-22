@@ -18,9 +18,14 @@ import org.zender.editor.localization.LocalizationEntry
 import org.zender.editor.pack.DataPack
 import org.zender.editor.pack.DataPackLoader
 import org.zender.editor.project.ModProject
+import org.zender.editor.project.ModProjectCreator
 import org.zender.editor.project.ModProjectLoader
 import org.zender.editor.project.ModProjectWriter
 import org.zender.editor.project.NewObjectRequest
+import org.zender.editor.project.NewPatchRequest
+import org.zender.editor.project.NewProjectRequest
+import org.zender.editor.project.PatchKind
+import org.zender.editor.project.ProjectPatchFactory
 import org.zender.editor.project.ProjectObject
 import org.zender.editor.project.ProjectObjectFactory
 import org.zender.editor.project.ResourceImportResult
@@ -90,6 +95,21 @@ class FileMcpWorkspace(
             )
         }
         val loaded = result.projectOrThrow()
+        project = loaded
+        diagnostics = result.diagnostics
+        dirty = false
+        return loaded
+    }
+
+    override fun createProject(request: NewProjectRequest): ModProject {
+        val result = ModProjectCreator(fileStore).create(request)
+        val created = result.project
+        if (created == null || result.diagnostics.any { it.isError }) {
+            throw McpToolException(
+                "创建工程失败：" + result.diagnostics.joinToString("；") { it.message },
+            )
+        }
+        val loaded = created.withBasePack(pack)
         project = loaded
         diagnostics = result.diagnostics
         dirty = false
@@ -241,6 +261,37 @@ class FileMcpWorkspace(
         diagnostics = result.diagnostics
         dirty = true
         return created
+    }
+
+    override fun createPatch(request: NewPatchRequest): PatchOutcome {
+        val current = requireProject()
+        val result = ProjectPatchFactory(pack).create(current, request)
+        if (!result.isSuccess) {
+            throw McpToolException(
+                "新建补丁失败：" + result.diagnostics.joinToString("；") { it.message },
+            )
+        }
+        project = result.project
+            ?: throw McpToolException("新建补丁失败：没有返回工程快照")
+        diagnostics = result.diagnostics
+        dirty = true
+        val gameSourceModify = result.gameSourceModify
+        if (gameSourceModify != null) {
+            return PatchOutcome(
+                kind = PatchKind.GAME_SOURCE_MODIFY,
+                relativePath = gameSourceModify.relativePath,
+                target = gameSourceModify.targetGuid,
+            )
+        }
+        val dataObjectModify = result.dataObjectModify
+        if (dataObjectModify != null) {
+            return PatchOutcome(
+                kind = PatchKind.DATA_OBJECT_MODIFY,
+                relativePath = dataObjectModify.relativePath,
+                target = "${dataObjectModify.type}/${dataObjectModify.dataKey}",
+            )
+        }
+        throw McpToolException("新建补丁失败：没有返回补丁")
     }
 
     override fun updateLocalization(

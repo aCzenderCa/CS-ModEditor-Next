@@ -78,7 +78,7 @@ internal class FieldProjectionServiceTest {
         val result = service.project(
             miniKnifeDocument(),
             "CardData",
-            FieldProjectionOptions(includeDefaults = false),
+            FieldProjectionOptions(defaultFilter = DefaultValueFilter.ALL),
         )
 
         val names = result.rows.map { it.name }
@@ -87,6 +87,62 @@ internal class FieldProjectionServiceTest {
         assertFalse("CardInteractions" in names)
         assertTrue("CardName" in names)
         assertTrue("ObjectWeight" in names)
+    }
+
+    @Test
+    fun `仅过滤顶级默认值字段`() {
+        val repository = SchemaRepository.fromDefinitions(
+            typeStructs = mapOf(
+                "Outer" to org.zender.editor.schema.TypeStructDefinition(
+                    typeName = "Outer",
+                    fields = listOf(
+                        org.zender.editor.schema.FieldDefinition("Inner", "InnerType"),
+                        org.zender.editor.schema.FieldDefinition("Other", "Int32"),
+                    ),
+                ),
+                "InnerType" to org.zender.editor.schema.TypeStructDefinition(
+                    typeName = "InnerType",
+                    fields = listOf(
+                        org.zender.editor.schema.FieldDefinition("Flag", "Boolean"),
+                        org.zender.editor.schema.FieldDefinition("Count", "Int32"),
+                    ),
+                ),
+            ),
+            templates = mapOf(
+                "Outer" to JsonDocument.parseOrThrow(
+                    """{"Inner":{"Flag":false,"Count":0},"Other":0}""",
+                ).root as org.zender.editor.document.JsonNode.ObjectNode,
+                "InnerType" to JsonDocument.parseOrThrow(
+                    """{"Flag":false,"Count":0}""",
+                ).root as org.zender.editor.document.JsonNode.ObjectNode,
+            ),
+        )
+        val service = FieldProjectionService(repository)
+        val document = JsonDocument.parseOrThrow(
+            """{"Inner":{"Flag":false,"Count":5},"Other":0}""",
+        )
+
+        val topLevelOnly = service.project(
+            document,
+            "Outer",
+            FieldProjectionOptions(defaultFilter = DefaultValueFilter.TOP_LEVEL),
+        )
+        val names = topLevelOnly.rows.map { it.name }
+        // 顶级默认字段被隐藏。
+        assertFalse("Other" in names)
+        // 非顶级字段中的默认子字段仍保留。
+        val inner = assertNotNull(topLevelOnly.rows.find { it.name == "Inner" })
+        assertTrue(inner.children.any { it.name == "Flag" })
+
+        // 全部过滤时子字段中的默认值也会被隐藏。
+        val all = service.project(
+            document,
+            "Outer",
+            FieldProjectionOptions(defaultFilter = DefaultValueFilter.ALL),
+        )
+        val filteredInner = assertNotNull(all.rows.find { it.name == "Inner" })
+        assertTrue(filteredInner.children.none { it.name == "Flag" })
+        assertTrue(filteredInner.children.any { it.name == "Count" })
     }
 
     @Test
@@ -209,7 +265,7 @@ internal class FieldProjectionServiceTest {
             JsonDocument(template),
             "CardData",
             FieldProjectionOptions(
-                includeDefaults = false,
+                defaultFilter = DefaultValueFilter.ALL,
                 favorites = setOf(
                     FavoriteField("CardData", "CardType"),
                     FavoriteField("CardData", "CardName.DefaultText"),
@@ -232,7 +288,7 @@ internal class FieldProjectionServiceTest {
         val result = service.project(
             document,
             "CardData",
-            FieldProjectionOptions(includeDefaults = false),
+            FieldProjectionOptions(defaultFilter = DefaultValueFilter.ALL),
         )
 
         val tags = assertNotNull(result.rows.find { it.name == "CardTags" })
@@ -243,6 +299,37 @@ internal class FieldProjectionServiceTest {
                 it.name.endsWith("WarpData") || it.name.endsWith("WarpType")
             },
         )
+    }
+
+    @Test
+    fun `ML ModLoader 扩展字段仅在 JSON 中存在时显示`() {
+        val schema = assertNotNull(repository.schema("CardData"))
+        assertEquals(
+            org.zender.editor.schema.FieldKind.LIST,
+            assertNotNull(schema.field("MatchTagWarpData")).kind,
+        )
+        assertEquals(
+            org.zender.editor.schema.FieldKind.BOOLEAN,
+            assertNotNull(schema.field("ModLoaderSpecialOverwrite")).kind,
+        )
+
+        val without = service.project(miniKnifeDocument(), "CardData")
+        assertTrue(without.rows.none { it.name == "MatchTagWarpData" })
+        assertTrue(without.rows.none { it.name == "ModLoaderSpecialOverwrite" })
+
+        val withFields = service.project(
+            JsonDocument.parseOrThrow(
+                """{
+                  "MatchTagWarpData": ["tag_Mini"],
+                  "MatchTypeWarpData": "Base",
+                  "ModLoaderSpecialOverwrite": true
+                }""",
+            ),
+            "CardData",
+        )
+        assertTrue(withFields.rows.any { it.name == "MatchTagWarpData" })
+        assertTrue(withFields.rows.any { it.name == "MatchTypeWarpData" })
+        assertTrue(withFields.rows.any { it.name == "ModLoaderSpecialOverwrite" })
     }
 
     @Test
@@ -275,6 +362,149 @@ internal class FieldProjectionServiceTest {
         )
 
         assertEquals(listOf("CardImage", "WhenCreatedSounds"), result.rows.map { it.name })
+    }
+
+    @Test
+    fun `补丁模式展示只有 Warp 配对的引用字段`() {
+        val repository = SchemaRepository.fromDefinitions(
+            typeStructs = mapOf(
+                "CharacterPerk" to org.zender.editor.schema.TypeStructDefinition(
+                    typeName = "CharacterPerk",
+                    fields = listOf(
+                        org.zender.editor.schema.FieldDefinition("ContainedPerks", "PerkTag"),
+                    ),
+                ),
+            ),
+            templates = mapOf(
+                "CharacterPerk" to JsonDocument.parseOrThrow(
+                    """{"ContainedPerks":[]}""",
+                ).root as org.zender.editor.document.JsonNode.ObjectNode,
+            ),
+            referenceTypes = setOf("PerkTag"),
+        )
+        val service = FieldProjectionService(repository)
+        val document = JsonDocument.parseOrThrow(
+            """{"ContainedPerksWarpData":[],"ContainedPerksWarpType":6}""",
+        )
+
+        val patch = service.project(
+            document,
+            "CharacterPerk",
+            FieldProjectionOptions(
+                defaultFilter = DefaultValueFilter.ALL,
+                patchMode = true,
+            ),
+        )
+        val row = assertNotNull(patch.rows.find { it.name == "ContainedPerks" })
+        assertFalse(row.isDefault)
+        assertTrue(row.isModified)
+
+        val objectDocument = service.project(
+            document,
+            "CharacterPerk",
+            FieldProjectionOptions(defaultFilter = DefaultValueFilter.ALL),
+        )
+        assertTrue(objectDocument.rows.none { it.name == "ContainedPerks" })
+    }
+
+    @Test
+    fun `未激活的 DurabilityStat 视作默认值`() {
+        val repository = SchemaRepository.fromDefinitions(
+            typeStructs = mapOf(
+                "CardData" to org.zender.editor.schema.TypeStructDefinition(
+                    typeName = "CardData",
+                    fields = listOf(
+                        org.zender.editor.schema.FieldDefinition("SpoilageTime", "DurabilityStat"),
+                    ),
+                ),
+                "DurabilityStat" to org.zender.editor.schema.TypeStructDefinition(
+                    typeName = "DurabilityStat",
+                    fields = listOf(
+                        org.zender.editor.schema.FieldDefinition("Active", "Boolean"),
+                        org.zender.editor.schema.FieldDefinition("MaxValue", "Single"),
+                    ),
+                ),
+            ),
+            templates = mapOf(
+                "CardData" to JsonDocument.parseOrThrow(
+                    """{"SpoilageTime":{"Active":false,"MaxValue":0.0}}""",
+                ).root as org.zender.editor.document.JsonNode.ObjectNode,
+            ),
+        )
+        val service = FieldProjectionService(repository)
+
+        val inactive = service.project(
+            JsonDocument.parseOrThrow(
+                """{"SpoilageTime":{"Active":false,"MaxValue":42.0}}""",
+            ),
+            "CardData",
+        ).rows.single { it.name == "SpoilageTime" }
+        assertTrue(inactive.isDefault, "未激活的 DurabilityStat 应视作默认值")
+        assertFalse(inactive.isModified)
+
+        val active = service.project(
+            JsonDocument.parseOrThrow(
+                """{"SpoilageTime":{"Active":true,"MaxValue":42.0}}""",
+            ),
+            "CardData",
+        ).rows.single { it.name == "SpoilageTime" }
+        assertFalse(active.isDefault)
+        assertTrue(active.isModified)
+    }
+
+    @Test
+    fun `图片与音频字段没有引用时视作默认值`() {
+        val repository = SchemaRepository.fromDefinitions(
+            typeStructs = mapOf(
+                "CardData" to org.zender.editor.schema.TypeStructDefinition(
+                    typeName = "CardData",
+                    fields = listOf(
+                        org.zender.editor.schema.FieldDefinition("CardImage", "Sprite"),
+                        org.zender.editor.schema.FieldDefinition("WhenCreatedSounds", "AudioClip"),
+                    ),
+                ),
+            ),
+            templates = mapOf(
+                "CardData" to JsonDocument.parseOrThrow(
+                    """{"CardImage":{},"WhenCreatedSounds":{}}""",
+                ).root as org.zender.editor.document.JsonNode.ObjectNode,
+            ),
+            referenceTypes = setOf("Sprite", "AudioClip"),
+        )
+        val service = FieldProjectionService(repository)
+
+        val unreferenced = service.project(
+            JsonDocument.parseOrThrow(
+                """{
+                  "CardImage": {},
+                  "CardImageWarpData": "",
+                  "CardImageWarpType": 3,
+                  "WhenCreatedSounds": {"m_FileID": 7}
+                }""",
+            ),
+            "CardData",
+        ).rows
+        assertTrue(
+            unreferenced.single { it.name == "CardImage" }.isDefault,
+            "没有引用的图片字段应视作默认值",
+        )
+        assertTrue(
+            unreferenced.single { it.name == "WhenCreatedSounds" }.isDefault,
+            "没有引用的音频字段应视作默认值",
+        )
+
+        val referenced = service.project(
+            JsonDocument.parseOrThrow(
+                """{
+                  "CardImage": {},
+                  "CardImageWarpData": "img_Card",
+                  "CardImageWarpType": 3
+                }""",
+            ),
+            "CardData",
+        ).rows.single { it.name == "CardImage" }
+        assertFalse(referenced.isDefault)
+        assertTrue(referenced.isModified)
     }
 
     @Test

@@ -11,11 +11,28 @@ import org.zender.editor.schema.SchemaRepository
 import org.zender.editor.schema.TypeSchema
 import org.zender.editor.settings.FavoriteField
 
+/** 默认值字段的过滤范围。 */
+enum class DefaultValueFilter {
+    /** 不过滤，显示所有字段。 */
+    NONE,
+
+    /** 只隐藏等于默认值的顶级字段；子字段全部保留。 */
+    TOP_LEVEL,
+
+    /** 所有层级都隐藏等于默认值的字段。 */
+    ALL,
+}
+
 data class FieldProjectionOptions(
-    /** 是否显示等于模板默认值的字段；关闭后只保留有实际修改的字段。 */
-    val includeDefaults: Boolean = true,
+    /** 默认值字段的过滤范围；[DefaultValueFilter.NONE] 表示全部显示。 */
+    val defaultFilter: DefaultValueFilter = DefaultValueFilter.NONE,
     /** 是否把 Schema 未声明的字段作为「未知字段」展示。 */
     val includeUnknown: Boolean = true,
+    /**
+     * 补丁模式：存在 `XxxWarpData` / `XxxWarpType` 配对即说明该引用字段是补丁内容，
+     * 即使数据为空也要展示，便于选择引用。
+     */
+    val patchMode: Boolean = false,
     val includeReadOnly: Boolean = true,
     /** 收藏字段，按「类型 + 文档根相对路径」匹配。 */
     val favorites: Set<FavoriteField> = emptySet(),
@@ -75,7 +92,7 @@ class FieldProjectionService(
             )
             unknownRows(root, JsonPath.ROOT, context)
         } else {
-            objectRows(root, schema, JsonPath.ROOT, context, issues)
+            objectRows(root, schema, JsonPath.ROOT, context, issues, topLevel = true)
         }
         return FieldProjectionResult(typeName = typeName, rows = rows, issues = issues)
     }
@@ -86,18 +103,30 @@ class FieldProjectionService(
         basePath: JsonPath,
         context: ProjectionContext,
         issues: MutableList<FieldProjectionIssue>,
+        topLevel: Boolean,
     ): List<FieldRow> {
         val rows = mutableListOf<FieldRow>()
+        val filterDefaults = when (context.options.defaultFilter) {
+            DefaultValueFilter.NONE -> false
+            DefaultValueFilter.TOP_LEVEL -> topLevel
+            DefaultValueFilter.ALL -> true
+        }
         for (field in schema.fields) {
             if (!context.options.includeReadOnly && field.isReadOnly) continue
             val path = basePath.child(field.name)
             val value = node.get(field.name)
+            // 框架追加的可选字段只在 JSON 中实际存在时展示。
+            if (field.optionalWhenAbsent && value == null) continue
             // 引用字段的容器通常是 `{}` / `[]`，实际值在配对的 `XxxWarpData` 中。
             // 有引用时必须视为非默认，否则关闭“默认值”后字段会连同引用一起消失。
-            val isDefault = defaultValueResolver.isDefault(field, value) &&
-                !hasWarpReferences(node, field)
+            val isDefault = isDefaultValue(
+                node = node,
+                field = field,
+                value = value,
+                patchMode = context.options.patchMode,
+            )
             // 收藏字段及其祖先始终保留，即使当前值等于模板默认值。
-            if (!context.options.includeDefaults && isDefault &&
+            if (filterDefaults && isDefault &&
                 !context.isFavoriteOrContainsFavorite(path)
             ) {
                 continue
@@ -160,7 +189,7 @@ class FieldProjectionService(
                 if (nestedSchema == null) {
                     unknownRows(objectNode, path, context)
                 } else {
-                    objectRows(objectNode, nestedSchema, path, context, issues)
+                    objectRows(objectNode, nestedSchema, path, context, issues, topLevel = false)
                 }
             }
 
@@ -222,7 +251,7 @@ class FieldProjectionService(
                 if (elementSchema == null) {
                     unknownRows(objectNode, path, context)
                 } else {
-                    objectRows(objectNode, elementSchema, path, context, issues)
+                    objectRows(objectNode, elementSchema, path, context, issues, topLevel = false)
                 }
             }
         }
@@ -250,6 +279,53 @@ class FieldProjectionService(
         FieldKind.UNKNOWN -> unknownValueRows(element, path, context)
 
         else -> emptyList()
+    }
+
+    /**
+     * 字段是否处于默认状态。
+     *
+     * 除模板比较外有两条运行时语义：
+     * - `DurabilityStat` 未激活（`Active != true`）时游戏会忽略内部数据，整体视为默认值；
+     * - 图片/音频字段没有 `WarpData` 引用时视为默认值，字段本体的空容器不代表修改。
+     */
+    private fun isDefaultValue(
+        node: JsonNode.ObjectNode,
+        field: FieldSchema,
+        value: JsonNode?,
+        patchMode: Boolean,
+    ): Boolean {
+        // 补丁里显式写出 Warp 配对就代表要修改该引用字段，即使引用列表暂为空。
+        if (patchMode && isReferenceField(field) && hasWarpPair(node, field)) {
+            return false
+        }
+        if (field.typeName == DURABILITY_STAT_TYPE && value is JsonNode.ObjectNode) {
+            val active = (value.get(ACTIVE_FIELD) as? JsonNode.BooleanNode)?.value == true
+            if (!active) return true
+        }
+        if (isResourceReference(field) && !hasWarpReferences(node, field)) {
+            return true
+        }
+        return defaultValueResolver.isDefault(field, value) &&
+            !hasWarpReferences(node, field)
+    }
+
+    private fun isReferenceField(field: FieldSchema): Boolean =
+        field.kind == FieldKind.REFERENCE ||
+            (field.kind == FieldKind.LIST && field.elementKind == FieldKind.REFERENCE)
+
+    /** 字段是否显式带有 `XxxWarpData` / `XxxWarpType` 配对键。 */
+    private fun hasWarpPair(node: JsonNode.ObjectNode, field: FieldSchema): Boolean =
+        node.get(WarpFields.dataName(field.name)) != null ||
+            node.get(WarpFields.typeName(field.name)) != null
+
+    private fun isResourceReference(field: FieldSchema): Boolean = when (field.kind) {
+        FieldKind.REFERENCE -> field.typeName in RESOURCE_REFERENCE_TYPES
+
+        FieldKind.LIST ->
+            field.elementKind == FieldKind.REFERENCE &&
+                field.elementTypeName in RESOURCE_REFERENCE_TYPES
+
+        else -> false
     }
 
     private fun hasWarpReferences(node: JsonNode.ObjectNode, field: FieldSchema): Boolean {
@@ -346,5 +422,13 @@ class FieldProjectionService(
                         )
             }
         }
+    }
+
+    private companion object {
+        const val DURABILITY_STAT_TYPE = "DurabilityStat"
+        const val ACTIVE_FIELD = "Active"
+
+        /** 图片/音频资源引用类型；没有 `WarpData` 时不构成有效修改。 */
+        val RESOURCE_REFERENCE_TYPES = setOf("Sprite", "Texture", "Texture2D", "AudioClip")
     }
 }

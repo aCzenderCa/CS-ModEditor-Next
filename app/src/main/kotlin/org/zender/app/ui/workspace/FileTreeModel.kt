@@ -166,7 +166,8 @@ object FileTreeBuilder {
                     )
                 },
         )
-        if (gameSourceChildren.isNotEmpty()) {
+        // 即使没有补丁也显示 modify 目录，便于在其中直接新建第一个补丁。
+        if (!filter.patchesOnly || gameSourceChildren.isNotEmpty()) {
             nodes += FileTreeNode(
                 id = "group:gsm",
                 label = project.format.gameSourceModifyDirectory(),
@@ -199,7 +200,9 @@ object FileTreeBuilder {
                     },
                 )
             }
-        if (dataObjectChildren.isNotEmpty()) {
+        val dataObjectModifySupported =
+            project.format.dataObjectModifyDirectory("CardData") != null
+        if (dataObjectModifySupported && (!filter.patchesOnly || dataObjectChildren.isNotEmpty())) {
             nodes += FileTreeNode(
                 id = "group:dom",
                 label = "DataObjectModify",

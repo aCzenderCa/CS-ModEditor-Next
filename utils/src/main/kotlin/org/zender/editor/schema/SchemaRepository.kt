@@ -130,8 +130,106 @@ class SchemaRepository private constructor(
                 )
             }
         }
+        // ML ModLoader 追加的扩展字段：不在游戏 TypeStruct 中，只在 JSON 实际出现时展示。
+        modLoaderExtraFields(typeName).forEach { extra ->
+            if (fields.none { it.name == extra.name }) fields += extra
+        }
         return TypeSchema(typeName = typeName, fields = fields, template = template)
     }
+
+    /**
+     * ModLoader（ML）对特定类型追加的 JSON 字段。
+     *
+     * 这些字段由 ModLoader 在运行时解析，不属于游戏 TypeStruct；
+     * 编辑器把它们建模为普通字段（字符串/字符串列表/布尔），便于直接编辑。
+     */
+    private fun modLoaderExtraFields(typeName: String): List<FieldSchema> = when (typeName) {
+        "CardData" -> listOf(
+            mlBoolField(
+                "ModLoaderSpecialOverwrite",
+                "ML GameSourceModify：为 true 时先用 JSON 整体覆盖目标对象，再逐字段合并。",
+            ),
+            mlStringListField(
+                "MatchTagWarpData",
+                "ML GameSourceModify：按 CardTag 批量匹配目标卡牌；多个 Tag 为“与”关系。",
+            ),
+            mlStringField(
+                "MatchTypeWarpData",
+                "ML GameSourceModify：配合 MatchTagWarpData，按 CardType 名称进一步筛选目标。",
+            ),
+            mlStringField(
+                "BlueprintCardDataCardTabGroup",
+                "ML：蓝图卡加入的 CardTabGroup 名称。",
+            ),
+            mlStringField(
+                "BlueprintCardDataCardTabSubGroup",
+                "ML：蓝图卡加入的 CardTabGroup 子组名称。",
+            ),
+            mlStringListField(
+                "ItemCardDataCardTabGpGroup",
+                "ML：物品卡加入的 CardTabGroup 名称列表。",
+            ),
+            mlStringListField(
+                "CardDataCardFilterGroup",
+                "ML：卡牌加入的 CardFilterGroup 名称列表。",
+            ),
+        )
+
+        "CharacterPerk" -> listOf(
+            mlStringField(
+                "CharacterPerkPerkGroup",
+                "ML：把该 Perk 加入指定 PerkGroup。",
+            ),
+        )
+
+        "GameStat" -> listOf(
+            mlStringField(
+                "VisibleGameStatStatListTab",
+                "ML：让该属性显示在指定 StatListTab 中。",
+            ),
+        )
+
+        "PlayerCharacter" -> listOf(
+            mlStringField(
+                "PlayerCharacterJournalName",
+                "ML：指定角色日志使用的 ContentDisplayer 名称。",
+            ),
+        )
+
+        else -> emptyList()
+    }
+
+    private fun mlStringField(name: String, note: String): FieldSchema = FieldSchema(
+        name = name,
+        typeName = "String",
+        kind = FieldKind.STRING,
+        optionalWhenAbsent = true,
+        documentation = FieldDocumentation(
+            chinese = FieldNotes(alias = "ML 扩展", note = note),
+        ),
+    )
+
+    private fun mlStringListField(name: String, note: String): FieldSchema = FieldSchema(
+        name = name,
+        typeName = "String",
+        kind = FieldKind.LIST,
+        elementTypeName = "String",
+        elementKind = FieldKind.STRING,
+        optionalWhenAbsent = true,
+        documentation = FieldDocumentation(
+            chinese = FieldNotes(alias = "ML 扩展", note = note),
+        ),
+    )
+
+    private fun mlBoolField(name: String, note: String): FieldSchema = FieldSchema(
+        name = name,
+        typeName = "Boolean",
+        kind = FieldKind.BOOLEAN,
+        optionalWhenAbsent = true,
+        documentation = FieldDocumentation(
+            chinese = FieldNotes(alias = "ML 扩展", note = note),
+        ),
+    )
 
     private fun infer(typeName: String, sample: JsonNode?): InferredFieldType {
         if (sample is JsonNode.ArrayNode) {

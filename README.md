@@ -40,10 +40,10 @@ claude mcp get cs-modeditor
 
 | 类别 | 工具 |
 | --- | --- |
-| 加载/概览 | `open_pack`、`open_project`、`project_summary` |
+| 加载/新建/概览 | `open_pack`、`open_project`、`create_project`、`project_summary` |
 | 浏览/读取 | `list_object_types`、`list_objects`、`get_object`、`get_schema`、`list_localization`、`list_resources` |
 | 校验/保存 | `validate_project`、`save_project` |
-| 编辑 | `set_field`、`set_reference`、`clear_reference`、`remove_reference`、`create_object`、`set_localization`、`import_resource` |
+| 编辑 | `set_field`、`set_reference`、`clear_reference`、`remove_reference`、`create_object`、`create_patch`、`set_localization`、`import_resource` |
 
 ## 文档
 

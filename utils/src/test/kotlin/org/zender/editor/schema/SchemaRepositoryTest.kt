@@ -53,8 +53,9 @@ internal class SchemaRepositoryTest {
                 "CardInteractions",
                 "UniqueID",
             ),
-            schema.fields.map { it.name },
+            schema.fields.filterNot { it.optionalWhenAbsent }.map { it.name },
         )
+        assertTrue(schema.fields.any { it.name == "MatchTagWarpData" && it.optionalWhenAbsent })
         assertEquals(FieldKind.OBJECT, schema.field("CardName")?.kind)
         assertEquals(FieldKind.ENUM, schema.field("CardType")?.kind)
         assertEquals(FieldKind.FLOAT, schema.field("ObjectWeight")?.kind)
@@ -133,7 +134,7 @@ internal class SchemaRepositoryTest {
 
             assertEquals(
                 listOf("CardName", "OldDefaultEnvCards", "DefaultEnvCards", "DefaultEnvCardDrops"),
-                schema.fields.map { it.name },
+                schema.fields.filterNot { it.optionalWhenAbsent }.map { it.name },
             )
             val legacy = assertNotNull(schema.field("DefaultEnvCards"))
             assertEquals(FieldKind.LIST, legacy.kind)

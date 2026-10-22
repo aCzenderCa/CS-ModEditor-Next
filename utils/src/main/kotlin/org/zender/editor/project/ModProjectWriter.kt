@@ -73,8 +73,12 @@ class ModProjectWriter(
             }
         }
 
-        // 删除本次会话移除的对象文件；同一路径如果被重新创建则不删。
-        val livePaths = project.workingTree.objects.values.mapTo(HashSet()) { it.relativePath }
+        // 删除本次会话移除的对象/补丁文件；同一路径如果被重新创建则不删。
+        val livePaths = buildSet {
+            project.workingTree.objects.values.mapTo(this) { it.relativePath }
+            project.workingTree.gameSourceModifies.values.mapTo(this) { it.relativePath }
+            project.workingTree.dataObjectModifies.values.mapTo(this) { it.relativePath }
+        }
         project.workingTree.deletedPaths
             .filter { it.isNotBlank() && it !in livePaths }
             .forEach { relativePath ->

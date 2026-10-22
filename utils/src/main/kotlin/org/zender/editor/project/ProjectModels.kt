@@ -223,28 +223,40 @@ data class WorkingTree(
     fun withGameSourceModify(entry: GameSourceModify): WorkingTree {
         val updated = LinkedHashMap(gameSourceModifies)
         updated[entry.targetGuid] = entry
-        return copy(gameSourceModifies = updated)
+        return copy(
+            gameSourceModifies = updated,
+            deletedPaths = deletedPaths - entry.relativePath,
+        )
     }
 
     fun withoutGameSourceModify(targetGuid: String): WorkingTree {
-        if (targetGuid !in gameSourceModifies) return this
+        val existing = gameSourceModifies[targetGuid] ?: return this
         val updated = LinkedHashMap(gameSourceModifies)
         updated.remove(targetGuid)
-        return copy(gameSourceModifies = updated)
+        return copy(
+            gameSourceModifies = updated,
+            deletedPaths = deletedPaths + existing.relativePath,
+        )
     }
 
     fun withDataObjectModify(entry: DataObjectModify): WorkingTree {
         val updated = LinkedHashMap(dataObjectModifies)
         updated[entry.id] = entry
-        return copy(dataObjectModifies = updated)
+        return copy(
+            dataObjectModifies = updated,
+            deletedPaths = deletedPaths - entry.relativePath,
+        )
     }
 
     fun withoutDataObjectModify(type: String, dataKey: String): WorkingTree {
         val id = DataObjectModifyId(type, dataKey)
-        if (id !in dataObjectModifies) return this
+        val existing = dataObjectModifies[id] ?: return this
         val updated = LinkedHashMap(dataObjectModifies)
         updated.remove(id)
-        return copy(dataObjectModifies = updated)
+        return copy(
+            dataObjectModifies = updated,
+            deletedPaths = deletedPaths + existing.relativePath,
+        )
     }
 
     fun withResource(entry: ProjectResource): WorkingTree {

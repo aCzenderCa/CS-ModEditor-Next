@@ -19,6 +19,109 @@ import kotlin.test.assertTrue
 class ProjectToolsTest {
 
     @Test
+    fun `create_project 创建并打开新工程`() {
+        val harness = ToolHarness()
+        val root = Files.createTempDirectory("csmode-mcp-create-")
+        val projectRoot = root.resolve("new-mod")
+        try {
+            val created = harness.call(
+                "create_project",
+                buildJsonObject {
+                    put("path", projectRoot.toString())
+                    put("framework", "MC")
+                    put("name", "MCP 测试 Mod")
+                    put("namespace", "McpTestMod")
+                    put("author", "Claude")
+                    put("version", "1.2.3")
+                },
+            )
+            assertEquals("McpTestMod", created["namespace"]!!.jsonPrimitive.content)
+            assertEquals("MC", created["framework"]!!.jsonPrimitive.content)
+            assertTrue(Files.isRegularFile(projectRoot.resolve("ModMeta.json")))
+
+            val summary = harness.call("project_summary")
+            assertEquals("MC", summary["framework"]!!.jsonPrimitive.content)
+            assertEquals("McpTestMod", summary["namespace"]!!.jsonPrimitive.content)
+            assertEquals(0, summary["counts"]!!.jsonObject["objects"]!!.jsonPrimitive.int)
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `create_patch 创建 GameSourceModify 并写回`() {
+        val harness = ToolHarness()
+        val (_, projectRoot) = harness.openSampleProject()
+        val created = harness.call(
+            "create_patch",
+            buildJsonObject {
+                put("kind", "game_source_modify")
+                put("type", "CharacterPerk")
+                put("name", "MiniPerk")
+                put("save", true)
+            },
+        )
+        assertEquals("game_source_modify", created["kind"]!!.jsonPrimitive.content)
+        assertEquals("22222222222222222222222222222222", created["target"]!!.jsonPrimitive.content)
+        assertTrue(
+            created["path"]!!.jsonPrimitive.content.endsWith(
+                "GameSourceModify/22222222222222222222222222222222.json",
+            ),
+        )
+        assertTrue(
+            Files.isRegularFile(
+                projectRoot.resolve("GameSourceModify/22222222222222222222222222222222.json"),
+            ),
+        )
+        val summary = harness.call("project_summary")
+        assertEquals(2, summary["counts"]!!.jsonObject["gameSourceModifies"]!!.jsonPrimitive.int)
+    }
+
+    @Test
+    fun `create_patch 拒绝 ML DataObjectModify`() {
+        val harness = ToolHarness()
+        harness.openSampleProject()
+        val error = harness.callExpectError(
+            "create_patch",
+            buildJsonObject {
+                put("kind", "data_object_modify")
+                put("type", "CardTag")
+                put("name", "tag_Mini")
+            },
+        )
+        assertTrue(error.contains("DataObjectModify"), error)
+    }
+
+    @Test
+    fun `create_project 拒绝非空目录与非法框架`() {
+        val harness = ToolHarness()
+        val root = Files.createTempDirectory("csmode-mcp-create-fail-")
+        try {
+            Files.writeString(root.resolve("keep.txt"), "x")
+            val nonEmpty = harness.callExpectError(
+                "create_project",
+                buildJsonObject {
+                    put("path", root.toString())
+                    put("framework", "ML")
+                    put("name", "X")
+                },
+            )
+            assertTrue(nonEmpty.contains("非空") || nonEmpty.contains("空目录"), nonEmpty)
+
+            harness.callExpectError(
+                "create_project",
+                buildJsonObject {
+                    put("path", root.resolve("other").toString())
+                    put("framework", "XX")
+                    put("name", "X")
+                },
+            )
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `打开工程后返回框架与对象计数`() {
         val harness = ToolHarness()
         harness.openSampleProject()

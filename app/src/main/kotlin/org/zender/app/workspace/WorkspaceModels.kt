@@ -6,6 +6,7 @@ import org.zender.editor.document.JsonDocument
 import org.zender.editor.document.JsonPath
 import org.zender.editor.document.RawJsonDocument
 import org.zender.editor.edit.WarpType
+import org.zender.editor.field.DefaultValueFilter
 import org.zender.editor.framework.FrameworkId
 import org.zender.editor.objects.ObjectKey
 import org.zender.editor.pack.DataPack
@@ -48,6 +49,13 @@ data class PackDirectoryAnalysis(
     val isValid: Boolean get() = error == null
 }
 
+/** 补丁可添加的 Schema 字段。 */
+data class PatchFieldCandidate(
+    val name: String,
+    val displayName: String,
+    val typeLabel: String,
+)
+
 /** 引用选择器窗口类型。 */
 enum class PickerWindowKind {
     OBJECT,
@@ -69,8 +77,8 @@ enum class OpenProjectBehavior {
 
 /** 字段视图的显示过滤。 */
 data class FieldViewOptions(
-    /** 显示等于模板默认值的字段；补丁文档默认关闭。 */
-    val showDefaults: Boolean = true,
+    /** 默认值字段的过滤范围；补丁文档固定为全部过滤。 */
+    val defaultFilter: DefaultValueFilter = DefaultValueFilter.NONE,
     val showUnknown: Boolean = true,
     val onlyFavorites: Boolean = false,
     /** 只显示这些收藏夹中的字段；为空时不过滤收藏夹。 */

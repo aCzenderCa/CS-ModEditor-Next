@@ -103,6 +103,9 @@ internal class WorkingTreeTest {
         assertTrue(cleared.gameSourceModifies.isEmpty())
         assertTrue(cleared.dataObjectModifies.isEmpty())
         assertTrue(cleared.resources.isEmpty())
+        // 删除的补丁路径会记录到 deletedPaths，保存工程时清理磁盘文件。
+        assertTrue("GameSourceModify/1111.json" in cleared.deletedPaths)
+        assertTrue("Data/DataObjectModify/CardTag/FixtureMc@tag_X.json" in cleared.deletedPaths)
     }
 
     @Test

@@ -100,7 +100,8 @@ class McpProtocol(
             put(
                 "instructions",
                 "CS-ModEditor-Next 编辑器内嵌的 MCP 服务。典型流程：open_pack 加载游戏数据包 → " +
-                    "open_project 打开 Mod 工程 → list_objects/get_object 浏览 → " +
+                    "create_project 新建工程（已有工程用 open_project 打开）→ " +
+                    "list_objects/get_object 浏览（可用 create_patch 新建 GameSourceModify / DataObjectModify）→ " +
                     "get_schema 确认字段 → set_field/set_reference 修改（会立即反映到编辑器）→ " +
                     "validate_project 校验 → save_project 落盘。",
             )
